@@ -2,7 +2,7 @@
 
 import asyncio
 import os
-from typing import Any
+from typing import Any, List
 import structlog
 import httpx
 
@@ -13,7 +13,7 @@ async def web_search(
     query: str,
     max_results: int = 5,
     include_answer: bool = True,
-) -> list[dict[str, Any]]:
+) -> List[dict[str, Any]]:
     """
     Search the web using Tavily API.
 
