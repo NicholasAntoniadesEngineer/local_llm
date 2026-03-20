@@ -1,6 +1,6 @@
 """Memory tools: persistence and retrieval."""
 
-from typing import Any
+from typing import Any, Optional
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -10,7 +10,7 @@ async def save_finding(
     session_id: str,
     title: str,
     content: str,
-    sources: list[str] | None = None,
+    sources: Optional[list[str]] = None,
     confidence: float = 0.5,
     importance: int = 5,
 ) -> dict[str, Any]:
@@ -88,7 +88,7 @@ async def retrieve_context(
 async def update_session_status(
     session_id: str,
     status: str,
-    metadata: dict[str, Any] | None = None,
+    metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Update session execution status.

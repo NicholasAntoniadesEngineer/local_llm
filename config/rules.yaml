@@ -131,3 +131,132 @@ learning_rules: []
 #   derived_from: "task_uuid_abc123"
 #   failure_case: "Claimed model had feature it didn't actually have (found in model card later)"
 #   effectiveness_score: 0.0  # Will be updated after A/B testing
+
+# ─────────────────────────────────────────────────────────────
+# TRADING RULES: Autonomous trading agent strategy & risk management
+# ─────────────────────────────────────────────────────────────
+
+trading_rules:
+  # Hard Risk Management Rules (Cannot be overridden)
+  hard_trading_rules:
+    - id: TR_H1
+      priority: critical
+      rule: "Never risk more than 5% of capital per trade"
+      enforcement: "block_if_violated"
+      rationale: "Prevents account blowup from consecutive losses"
+
+    - id: TR_H2
+      priority: critical
+      rule: "Never leverage. Only trade with capital you own."
+      enforcement: "block_if_violated"
+      rationale: "Leverage amplifies losses catastrophically"
+
+    - id: TR_H3
+      priority: critical
+      rule: "Stop-loss: Cut losses at -10% per position immediately"
+      enforcement: "block_if_violated"
+      rationale: "Limits damage from wrong predictions"
+
+    - id: TR_H4
+      priority: critical
+      rule: "Maximum 10 concurrent open positions"
+      enforcement: "block_if_violated"
+      rationale: "Prevents overexposure and concentration risk"
+
+  # Soft Trading Rules (Can improve based on P&L results)
+  soft_trading_rules:
+    - id: TR_S1
+      priority: high
+      confidence: 0.85
+      rule: "Only trade markets with confidence > 60% based on research"
+      rationale: "Low-conviction trades have poor risk/reward"
+
+    - id: TR_S2
+      priority: high
+      confidence: 0.80
+      rule: "Require minimum 2x reward-to-risk ratio before trading"
+      rationale: "Ensures positive expected value even with 50% win rate"
+
+    - id: TR_S3
+      priority: high
+      confidence: 0.75
+      rule: "Prefer markets with high liquidity (>€10k depth)"
+      rationale: "Prevents slippage and execution problems"
+
+    - id: TR_S4
+      priority: medium
+      confidence: 0.70
+      rule: "Research market sentiment (Twitter, Discord, news) before executing"
+      rationale: "Momentum confirms technical signals"
+
+    - id: TR_S5
+      priority: medium
+      confidence: 0.65
+      rule: "Increase position size on consecutive wins (up to 7.5% per trade when hot)"
+      rationale: "Exploit winning streaks while confidence is high"
+
+    - id: TR_S6
+      priority: medium
+      confidence: 0.60
+      rule: "Reduce position size during drawdowns (minimum 2.5%)"
+      rationale: "Minimize damage during losing streaks"
+
+    - id: TR_S7
+      priority: low
+      confidence: 0.55
+      rule: "Prefer event-driven trades (earnings, crypto events, political markets)"
+      rationale: "Catalysts provide directional clarity"
+
+  # Platform Rules (Where to trade)
+  platform_rules:
+    - id: TR_P1
+      priority: high
+      rule: "Only trade on platforms with API access for automation"
+      rationale: "Manual execution is slower and error-prone"
+
+    - id: TR_P2
+      priority: high
+      rule: "Verify platform has <1% fees; reject if higher"
+      rationale: "High fees destroy profitability at scale"
+
+    - id: TR_P3
+      priority: medium
+      rule: "Diversify across 2-3 platforms to reduce single-point failure risk"
+      rationale: "Platform outages should not stop all trading"
+
+    - id: TR_P4
+      priority: medium
+      rule: "Check platform regulatory status before trading significant capital"
+      rationale: "Unregulated platforms can disappear with your money"
+
+  # Discovery Rules (What markets to research)
+  discovery_rules:
+    - id: TR_D1
+      priority: high
+      rule: "Daily check: Polymarket, Manifold, Betfair, Kraken for opportunities"
+      rationale: "Covers prediction, sports, and crypto"
+
+    - id: TR_D2
+      priority: high
+      rule: "Research upcoming events: Elections, earnings, crypto launches, sports"
+      rationale: "Events drive predictable market moves"
+
+    - id: TR_D3
+      priority: medium
+      rule: "Monitor on-chain data (whale movements, contract deployments)"
+      rationale: "Signals intent before market price reflects it"
+
+    - id: TR_D4
+      priority: medium
+      rule: "Track arbitrage opportunities (same market on different platforms)"
+      rationale: "Risk-free trades when spreads are wide"
+
+  # Learning Rules (Generated from P&L feedback)
+  trading_learning_rules: []
+  # These get added automatically as the agent learns:
+  # - id: TR_L1
+  #   priority: medium
+  #   confidence: 0.72
+  #   rule: "After 3 losing trades in a row, pause for 24 hours"
+  #   derived_from: "poor_streak_observation"
+  #   effectiveness_score: 0.65

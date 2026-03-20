@@ -1,6 +1,6 @@
 """Agent state definition for LangGraph orchestration."""
 
-from typing import TypedDict, Any, Literal
+from typing import TypedDict, Any, Literal, Optional
 from datetime import datetime
 
 
@@ -69,7 +69,7 @@ class AgentState(TypedDict, total=False):
     last_tool_results: dict[str, Any]
     """Results from last tool invocation batch."""
 
-    tool_error: str | None
+    tool_error: Optional[str]
     """Error message if tool execution failed."""
 
     # Execution metadata
@@ -91,7 +91,7 @@ class AgentState(TypedDict, total=False):
     final_response: str
     """Final synthesized response (set in synthesis node)."""
 
-    error_message: str | None
+    error_message: Optional[str]
     """Error message if execution failed."""
 
     execution_status: Literal[
@@ -99,7 +99,7 @@ class AgentState(TypedDict, total=False):
     ]
     """Current execution phase."""
 
-    parent_message_id: str | None
+    parent_message_id: Optional[str]
     """Parent message ID for conversation threading (multi-turn support)."""
 
     metadata: dict[str, Any]

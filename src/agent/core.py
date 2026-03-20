@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional, Tuple
 import uuid
 
 import structlog
@@ -27,7 +27,7 @@ def create_agent_graph(
     memory_manager: MemoryManager,
     model_router: ModelRouter,
     checkpoint_dir: str = "data/checkpoints",
-) -> tuple[Any, SqliteSaver]:
+) -> Tuple[Any, SqliteSaver]:
     """
     Create LangGraph state machine for research agent.
 
@@ -56,35 +56,35 @@ def create_agent_graph(
 
     # Bind memory_manager and model_router to node functions
     # (Nodes use closure to access these)
-    def _plan(state: AgentState) -> AgentState:
+    async def _plan_async(state: AgentState) -> AgentState:
         return plan_node(state, memory_manager, model_router)
 
-    def _think(state: AgentState) -> AgentState:
+    async def _think_async(state: AgentState) -> AgentState:
         return think_node(state, memory_manager, model_router)
 
-    def _act(state: AgentState) -> AgentState:
-        return asyncio.run(act_node(state, memory_manager, model_router))
+    async def _act_async(state: AgentState) -> AgentState:
+        return await act_node(state, memory_manager, model_router)
 
-    def _observe(state: AgentState) -> AgentState:
-        return asyncio.run(observe_node(state, memory_manager, model_router))
+    async def _observe_async(state: AgentState) -> AgentState:
+        return await observe_node(state, memory_manager, model_router)
 
-    def _reflect(state: AgentState) -> AgentState:
+    async def _reflect_async(state: AgentState) -> AgentState:
         return reflect_node(state, memory_manager, model_router)
 
-    def _synthesize(state: AgentState) -> AgentState:
+    async def _synthesize_async(state: AgentState) -> AgentState:
         return synthesize_node(state, memory_manager, model_router)
 
-    def _enforce_rules(state: AgentState) -> AgentState:
-        return asyncio.run(enforce_rules_node(state, memory_manager, model_router))
+    async def _enforce_rules_async(state: AgentState) -> AgentState:
+        return await enforce_rules_node(state, memory_manager, model_router)
 
     # Add nodes
-    graph.add_node("plan", _plan)
-    graph.add_node("think", _think)
-    graph.add_node("act", _act)
-    graph.add_node("observe", _observe)
-    graph.add_node("reflect", _reflect)
-    graph.add_node("synthesize", _synthesize)
-    graph.add_node("enforce_rules", _enforce_rules)
+    graph.add_node("plan", _plan_async)
+    graph.add_node("think", _think_async)
+    graph.add_node("act", _act_async)
+    graph.add_node("observe", _observe_async)
+    graph.add_node("reflect", _reflect_async)
+    graph.add_node("synthesize", _synthesize_async)
+    graph.add_node("enforce_rules", _enforce_rules_async)
 
     # Add edges
     graph.add_edge(START, "plan")
@@ -158,9 +158,9 @@ class ResearchAgent:
         self,
         objective: str,
         max_steps: int = 15,
-        session_id: str | None = None,
-        parent_message_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        session_id: Optional[str] = None,
+        parent_message_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """
         Execute autonomous research for given objective.
@@ -286,7 +286,7 @@ class ResearchAgent:
                 "error_message": str(e),
             }
 
-    async def resume_session(self, session_id: str) -> dict[str, Any]:
+    async def resume_session(self, session_id: str) -> dict[str, Any]:  # noqa: E501
         """
         Resume a paused research session.
 
