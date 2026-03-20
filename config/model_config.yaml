@@ -1,0 +1,194 @@
+# Model Configuration for Local LLM Agent
+# Each role has assigned models in priority order (fallback chain)
+
+models:
+  qwen3_32b:
+    name: "qwen3:32b"
+    type: "reasoning"
+    backend: "ollama"
+    size_gb: 19
+    tok_s: 22
+    tok_s_mlx: 32
+    context_window: 32768
+    quantization: "Q4_K_M"
+    supports_thinking: true
+    description: "Primary reasoning model, best overall quality at 32B"
+
+  qwen3_8b:
+    name: "qwen3:8b"
+    type: "orchestration"
+    backend: "ollama"
+    size_gb: 5
+    tok_s: 85
+    tok_s_mlx: 120
+    context_window: 32768
+    quantization: "Q4_K_M"
+    supports_thinking: false
+    description: "Fast model for planning, routing, classification"
+
+  qwen3_30b_a3b:
+    name: "qwen3:30b-a3b"
+    type: "moe"
+    backend: "ollama"
+    size_gb: 18
+    tok_s: 45
+    tok_s_mlx: 92
+    context_window: 32768
+    quantization: "Q4_K_M"
+    supports_thinking: false
+    active_params: "3B"
+    description: "MoE model: 30B total, only 3B active per token. Fast + capable."
+
+  qwen2_5_coder_32b:
+    name: "qwen2.5-coder:32b"
+    type: "code"
+    backend: "ollama"
+    size_gb: 19
+    tok_s: 22
+    tok_s_mlx: 32
+    context_window: 32768
+    quantization: "Q4_K_M"
+    supports_thinking: false
+    description: "Specialized for code generation and analysis"
+
+  nomic_embed:
+    name: "nomic-embed-text"
+    type: "embedding"
+    backend: "ollama"
+    size_gb: 0.5
+    tok_s: 200
+    context_window: 8192
+    quantization: "fp16"
+    supports_matryoshka: true
+    description: "8K context embeddings with Matryoshka support"
+
+  mlx_qwen3_32b:
+    name: "mlx-community/Qwen3-32B-4bit"
+    type: "reasoning"
+    backend: "mlx"
+    size_gb: 19
+    tok_s: 32
+    context_window: 32768
+    quantization: "Q4_K_M"
+    supports_thinking: true
+    description: "MLX version of Qwen3:32b (2x faster on Apple Silicon)"
+
+roles:
+  # Role: Orchestrator/Planner
+  orchestrate:
+    primary: "qwen3:8b"
+    fallback:
+      - "qwen3:30b-a3b"
+      - "qwen3:32b"
+    backend_preference: "mlx"
+    constraints:
+      max_tokens: 1000
+      temperature: 0.1
+      thinking_enabled: false
+    description: "Plan tasks, route to tools, decide continuation"
+    tool_calls: true
+    json_mode: true
+
+  # Role: Deep Reasoning/Research
+  reason:
+    primary: "qwen3:32b"
+    fallback:
+      - "qwen3:30b-a3b"
+    backend_preference: "mlx"
+    constraints:
+      max_tokens: 2000
+      temperature: 0.3
+      thinking_enabled: true
+      thinking_budget: 500
+    description: "Complex analysis, multi-step reasoning, research"
+    tool_calls: true
+    json_mode: false
+
+  # Role: Synthesis/Writing
+  synthesize:
+    primary: "qwen3:32b"
+    fallback:
+      - "qwen3:30b-a3b"
+    backend_preference: "mlx"
+    constraints:
+      max_tokens: 1500
+      temperature: 0.5
+      thinking_enabled: false
+    description: "Combine findings, write coherent summaries"
+    tool_calls: false
+    json_mode: false
+
+  # Role: Classification/Triage
+  triage:
+    primary: "qwen3:30b-a3b"
+    fallback:
+      - "qwen3:8b"
+    backend_preference: "mlx"
+    constraints:
+      max_tokens: 500
+      temperature: 0.1
+      thinking_enabled: false
+    description: "Quick classification, filtering, routing decisions"
+    tool_calls: false
+    json_mode: true
+
+  # Role: Code Generation
+  code:
+    primary: "qwen2.5-coder:32b"
+    fallback:
+      - "qwen3:32b"
+    backend_preference: "ollama"
+    constraints:
+      max_tokens: 2000
+      temperature: 0.1
+      thinking_enabled: false
+    description: "Generate and analyze code"
+    tool_calls: true
+    json_mode: false
+
+  # Role: Embeddings
+  embed:
+    primary: "nomic-embed-text"
+    fallback: null
+    backend_preference: "ollama"
+    constraints:
+      max_tokens: 8192
+    description: "Generate embeddings for memory and retrieval"
+    task_prefixes:
+      document: "search_document:"
+      query: "search_query:"
+      classify: "classification:"
+      cluster: "clustering:"
+
+# Hardware constraints (M4 Max 36GB)
+hardware:
+  total_ram_gb: 36
+  usable_for_models_gb: 34
+  memory_bandwidth_gb_s: 410
+  max_concurrent_32b_models: 1
+  max_concurrent_8b_models: 4
+  warning_threshold_pct: 80
+  critical_threshold_pct: 95
+
+# Backend configuration
+backends:
+  ollama:
+    base_url: "http://localhost:11434"
+    timeout_seconds: 300
+    auto_pull: true
+    keep_alive: "10m"
+
+  mlx:
+    cache_dir: "~/.cache/mlx"
+    dtype: "float16"
+    use_gpu: true
+    batch_size: 1
+
+# Optimization settings
+optimization:
+  use_mlx_when_available: true
+  enable_speculative_decoding: false
+  enable_flash_attention: true
+  batch_tool_calls: true
+  parallel_tool_limit: 3
+  context_compression_threshold: 0.8
