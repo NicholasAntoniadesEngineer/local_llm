@@ -132,10 +132,10 @@ def main():
     """Main entry point."""
 
     if len(sys.argv) < 2:
-        print("Usage: python improve.py <cycle_number>")
-        print("\nExample:")
-        print("  python improve.py 1    # Run cycle 1 (Search caching)")
-        print("  python improve.py 2    # Run cycle 2 (Metrics)")
+        print("Usage: python improve.py <cycle_number> [--loop]")
+        print("\nExamples:")
+        print("  python improve.py 1           # Run cycle 1")
+        print("  python improve.py 1 --loop    # Run cycles continuously")
         sys.exit(1)
 
     try:
@@ -144,11 +144,38 @@ def main():
         print("Error: cycle_number must be an integer")
         sys.exit(1)
 
-    # Run the improvement cycle
-    cycle = ImprovementCycle(cycle_num)
-    success = cycle.run()
+    # Check for loop mode
+    loop_mode = len(sys.argv) > 2 and sys.argv[2] == "--loop"
 
-    sys.exit(0 if success else 1)
+    if loop_mode:
+        # Continuous loop
+        current = cycle_num
+        while True:
+            print(f"\n{'='*80}")
+            print(f"Cycle #{current}")
+            print(f"{'='*80}\n")
+
+            cycle = ImprovementCycle(current)
+            success = cycle.run()
+
+            if not success and current > 10:
+                print("Too many failures, stopping")
+                break
+
+            current += 1
+
+            try:
+                print("\nWaiting 3 seconds before next cycle...")
+                import time
+                time.sleep(3)
+            except KeyboardInterrupt:
+                print("\n\nStopped by user")
+                break
+    else:
+        # Single cycle
+        cycle = ImprovementCycle(cycle_num)
+        success = cycle.run()
+        sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
