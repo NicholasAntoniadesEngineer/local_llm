@@ -1,154 +1,89 @@
-# 🤖 Self-Improving Agent System
+# Self-Improving Agent System
 
-An autonomous agent running on Apple Silicon (MLX) that improves itself iteratively through code analysis, testing, and implementation of its own improvements.
+An autonomous agent on Apple Silicon (MLX) that continuously improves itself by building new features each cycle.
 
 ## Quick Start
 
-### Prerequisites
-- Python 3.9+
-- MLX installed (`pip install mlx-lm`)
-- Virtual environment set up (`mlx_agent_env`)
-
-### Run Self-Improvement
-
 ```bash
+cd /Users/nicholasantoniades/Documents/GitHub/local_llm
 source mlx_agent_env/bin/activate
 
-# Single improvement cycle
-python3 self_improve.py
+# Run single improvement cycle
+python3 improve.py 1
 
-# Multiple cycles
-bash run_improvement_cycles.sh 3
-
-# With specific goal
-python3 agent.py "Your goal here"
+# Run continuous cycles
+bash run.sh
 ```
 
-## System Components
+## System
 
-| File | Purpose |
-|------|---------|
-| `agent.py` | Core ReAct loop with tools (search, code, file I/O) |
-| `config.py` | Configuration & model selection |
-| `memory.py` | Session memory & learning tracking |
-| `reflection.py` | Pattern detection & stuck-loop analysis |
-| `config_manager.py` | Config evolution for self-improvement |
-| `self_improve.py` | Self-improvement harness |
+| Component | Purpose |
+|-----------|---------|
+| `agent.py` | Core ReAct loop with tools |
+| `memory.py` | Session memory & discoveries |
+| `reflection.py` | Pattern detection & analysis |
+| `config.py` | Configuration & thresholds |
+| `config_manager.py` | Config versioning |
+| `improve.py` | Improvement cycle runner |
+| `run.sh` | Continuous execution |
 
 ## How It Works
 
-1. **Agent reads its own code** (`read_file` on agent.py, memory.py, reflection.py)
-2. **Identifies an improvement** (better loop detection, caching, optimization)
-3. **Implements the change** (`write_file` to update code)
-4. **Tests the change** (`run_python` with test code)
-5. **Measures improvement** (shows speedup, efficiency gain, etc.)
-6. **Iterates** - Goes to step 1 for next improvement
+Each cycle:
+1. Agent gets a specific feature to build
+2. Agent writes production-quality code
+3. Agent tests it works
+4. Code committed to git
+5. Repeat with next feature
 
 ## Features
 
-✅ **Quality-Aware Search** - Measures relevance of search results (0-1 scale)
-✅ **Intelligent Phase Forcing** - Decides research vs coding based on data quality
-✅ **Refined Query Suggestions** - Automatically tries different search angles
-✅ **Session Memory** - Tracks discoveries, failures, and learnings
-✅ **Loop Detection** - Recognizes when stuck and suggests pivots
-✅ **Self-Improvement** - Agent improves its own capabilities
+- **Quality-Aware Search**: Results scored 0-1 for relevance
+- **Intelligent Phasing**: Research vs code decisions based on data quality
+- **Loop Detection**: Recognizes stuck patterns
+- **Session Memory**: Tracks discoveries and learnings
+- **Git Integration**: All improvements committed automatically
 
-## Architecture
+## What Gets Built
 
-```
-Agent (ReAct Loop)
-├─ Tools: web_search, run_python, bash, read_file, write_file
-├─ Memory: Session tracking, discoveries, failures
-└─ Reflection: Pattern detection, improvement suggestions
-```
-
-## Self-Improvement Cycle
-
-The agent iteratively:
-
-1. **Analyzes** its own code
-2. **Plans** specific improvements
-3. **Implements** code changes
-4. **Tests** the changes
-5. **Measures** the improvement
-6. **Commits** if successful
-7. **Repeats**
-
-## Testing
-
-```bash
-# Test search quality detection
-source mlx_agent_env/bin/activate
-python3 test_search_quality.py
-```
-
-## Measuring Progress
-
-After each improvement cycle:
-
-```bash
-# See what files were created
-ls -lh agent_outputs/
-
-# Check code changes
-git diff agent.py reflection.py memory.py
-
-# View session memory
-ls -lh ~/.claude/sessions/
-```
+- **Cycle 1**: Search result caching
+- **Cycle 2**: Performance metrics
+- **Cycle 3**: Memory compression
+- **Cycle 4+**: Agent chooses improvements
 
 ## Configuration
 
 All settings in `config.py`:
+- Model selection (8B, 14B, 32B)
+- Timeout values
+- Quality thresholds
+- Context budgets
 
-```python
-class AgentConfig:
-    max_iterations = 50
-    web_search_timeout = 10
-    code_execution_timeout = 30
-    max_search_results = 5
-    low_quality_threshold = 0.4  # Search relevance score
-    high_quality_threshold = 0.6
+## Monitoring
+
+```bash
+# Watch new features
+watch -n 2 'ls -lh *.py'
+
+# Track git commits
+watch -n 2 'git log --oneline | head -10'
+
+# Check progress
+git log --oneline | grep "feat(cycle"
 ```
-
-## Improvement Ideas
-
-The agent can improve:
-- Loop detection (detect similar results, not just tool repeats)
-- Memory efficiency (compress old discoveries)
-- Search optimization (cache results)
-- Tool effectiveness (better Python code generation)
-- Reflection accuracy (better learning from failures)
-- Confidence scoring (know when to search vs code)
 
 ## Performance
 
-- **Model**: Qwen3-14B-4bit via MLX
-- **Speed**: ~60 tokens/second on Apple M4 Max
+- **Model**: Qwen3-14B-4bit (MLX)
+- **Speed**: ~60 tokens/second
 - **Context**: 16,384 tokens
-- **Memory**: Efficient session-based tracking
-
-## Next Steps
-
-1. Start with: `python3 self_improve.py`
-2. Watch it improve itself
-3. Check improvements in `agent_outputs/`
-4. Run more cycles: `bash run_improvement_cycles.sh 5`
+- **Platform**: Apple Silicon optimized
 
 ## Documentation
 
-- **SELF_IMPROVING_SYSTEM.md** - Architecture & detailed guide
-- **IMPROVEMENTS.md** - Recent enhancements
-
-## Status
-
-✅ Core system ready
-✅ Self-improvement harness implemented
-✅ Quality-aware search active
-✅ Ready for continuous improvement cycles
+See `docs/` folder for detailed information.
 
 ---
 
+**Status**: Production ready
 **Last Updated**: March 21, 2026
-**System**: Self-improving autonomous agent on MLX
-**Goal**: Continuously improve its own capabilities
