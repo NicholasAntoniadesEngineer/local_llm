@@ -622,33 +622,24 @@ class MLXAgent:
         # Use initial response to start
         initial_system = f"""GOAL: {goal}
 
-INSTRUCTION: Generate tool calls to accomplish your goal.
-Use this format:
+YOU MUST OUTPUT TOOL CALLS IN THIS EXACT FORMAT (no extra text):
 <tool>TOOL_NAME</tool>
 <args>{{"arg1": "value1", "arg2": "value2"}}</args>
 
+DO NOT write explanations or narrative. ONLY output tool calls.
+
 PHASES:
-1. RESEARCH (web_search): Find information you need
-2. IMPLEMENTATION (run_python): Write and test code
-3. SAVE (write_file): Save your work
+1. RESEARCH: Use web_search to find information
+2. IMPLEMENTATION: Use run_python to write code
+3. SAVE: Use write_file to save results
 
-Rules:
-- Use web_search when you need information
-- Use run_python to write and test code
-- Use write_file to save code to files
-- Be specific in your searches (more specific = better results)
-- If search quality is low (🔴), try different keywords
-- Only move to implementation when you have good information
-
-Available tools:
-- web_search: {{"query": "search terms"}}
-- run_python: {{"code": "python code"}}
-- write_file: {{"path": "filename.py", "content": "code here"}}
+Tool definitions:
+- web_search: {{"query": "your search query"}}
+- run_python: {{"code": "print('hello')"}}
+- write_file: {{"path": "filename.py", "content": "import sys\\nprint('code')"}}
 - read_file: {{"path": "filename.py"}}
-- bash: {{"cmd": "shell command"}}
 
-Start by researching what you need, then implement a solution.
-Go!"""
+OUTPUT NOW WITH TOOL CALL. No narrative."""
 
         response = self.chat("START", system=initial_system)
 
@@ -681,11 +672,25 @@ Go!"""
                     code_match = re.search(r'```python\s*(.*?)```', response, re.DOTALL)
                     if code_match:
                         code = code_match.group(1).strip().replace('"', r'\"')
-                        matches = [("run_python", f'{{"code": "{code[:100]}"}}')]
+                        matches = [("run_python", f'{{"code": "{code[:500]}"}}')]
                     else:
                         matches = [("run_python", '{"code": "print(\'test\')"}')]
                 elif "write_file" in narrative or "save" in narrative:
-                    matches = [("write_file", '{"path": "markets.py", "content": "# Polymarket data"}')]
+                    # Try to extract actual code from narrative
+                    code_match = re.search(r'```(?:python|)\s*(.*?)```', response, re.DOTALL)
+                    if code_match:
+                        code_content = code_match.group(1).strip()
+                        code_content = code_content.replace('"', r'\"').replace('\n', '\\n')
+                        filename = "solution.py" if "python" in narrative else "output.txt"
+                        matches = [("write_file", f'{{"path": "{filename}", "content": "{code_content[:1000]}"}}')]
+                    else:
+                        # Last resort: extract class or function definition
+                        def_match = re.search(r'(?:class|def) \w+.*?(?=\n(?:class|def|$))', response, re.DOTALL)
+                        if def_match:
+                            code_content = def_match.group(0).replace('"', r'\"').replace('\n', '\\n')
+                            matches = [("write_file", f'{{"path": "solution.py", "content": "{code_content[:1000]}"}}')]
+                        else:
+                            matches = [("write_file", '{"path": "output.py", "content": "# TODO: implement"}')]
 
             # Filter out invalid tool names (must be in allowed list)
             valid_tools = {"web_search", "run_python", "bash", "read_file", "write_file", "write_config", "spawn_subagent", "evaluate_version"}
