@@ -1,333 +1,154 @@
-# Local Autonomous Research Agent
+# 🤖 Self-Improving Agent System
 
-A high-performance autonomous research agent running entirely on local hardware (Apple M4 Max) using Ollama/MLX, with self-improving Constitutional AI rules, hierarchical memory system, and sophisticated retrieval pipelines.
-
-## Features
-
-- **Local-first inference**: No external LLM APIs, full privacy
-- **Hardware-optimized**: Apple M4 Max with 36GB RAM, MLX backend for 2x speed
-- **Self-improving rules**: Constitutional AI with A/B testing feedback loops
-- **Hierarchical memory**: Working (FIFO), episodic (SQLite), semantic (LanceDB vectors)
-- **Sophisticated retrieval**: HyDE expansion + hybrid BM25+vector search + cross-encoder reranking
-- **Web research**: Tavily API + Jina Reader for content extraction
-- **Checkpointing**: Resume long-running research tasks from checkpoints
-- **Async-first**: Full asyncio stack for parallelism
+An autonomous agent running on Apple Silicon (MLX) that improves itself iteratively through code analysis, testing, and implementation of its own improvements.
 
 ## Quick Start
 
 ### Prerequisites
-- macOS (M-series Apple Silicon)
-- Python 3.11+
-- Ollama installed (`brew install ollama`)
-- 36GB+ RAM
+- Python 3.9+
+- MLX installed (`pip install mlx-lm`)
+- Virtual environment set up (`mlx_agent_env`)
 
-### Setup
+### Run Self-Improvement
 
-1. **Clone and install**:
 ```bash
-cd local_llm
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+source mlx_agent_env/bin/activate
+
+# Single improvement cycle
+python3 self_improve.py
+
+# Multiple cycles
+bash run_improvement_cycles.sh 3
+
+# With specific goal
+python3 agent.py "Your goal here"
 ```
 
-2. **Configure environment**:
-```bash
-cp .env.example .env
-# Edit .env with your Tavily API key (TAVILY_API_KEY)
-```
+## System Components
 
-3. **Pull models**:
-```bash
-ollama pull qwen3:32b      # 19GB, main reasoning model
-ollama pull qwen3:30b-a3b  # 18GB, fast MoE orchestrator
-ollama pull qwen3:8b       # 5GB, fast routing
-ollama pull qwen2.5-coder:32b  # Code generation
-ollama pull nomic-embed-text    # 8K context embeddings
-```
+| File | Purpose |
+|------|---------|
+| `agent.py` | Core ReAct loop with tools (search, code, file I/O) |
+| `config.py` | Configuration & model selection |
+| `memory.py` | Session memory & learning tracking |
+| `reflection.py` | Pattern detection & stuck-loop analysis |
+| `config_manager.py` | Config evolution for self-improvement |
+| `self_improve.py` | Self-improvement harness |
 
-4. **Run a research task**:
-```bash
-python -m scripts.agent run \
-  --objective "Research state of local LLM inference in 2025" \
-  --max-steps 20 \
-  --rules config/rules.yaml
-```
+## How It Works
+
+1. **Agent reads its own code** (`read_file` on agent.py, memory.py, reflection.py)
+2. **Identifies an improvement** (better loop detection, caching, optimization)
+3. **Implements the change** (`write_file` to update code)
+4. **Tests the change** (`run_python` with test code)
+5. **Measures improvement** (shows speedup, efficiency gain, etc.)
+6. **Iterates** - Goes to step 1 for next improvement
+
+## Features
+
+✅ **Quality-Aware Search** - Measures relevance of search results (0-1 scale)
+✅ **Intelligent Phase Forcing** - Decides research vs coding based on data quality
+✅ **Refined Query Suggestions** - Automatically tries different search angles
+✅ **Session Memory** - Tracks discoveries, failures, and learnings
+✅ **Loop Detection** - Recognizes when stuck and suggests pivots
+✅ **Self-Improvement** - Agent improves its own capabilities
 
 ## Architecture
 
-### Three-Layer System
-
 ```
-┌──────────────────────────────────────────┐
-│ LAYER 1: ORCHESTRATION (LangGraph)       │
-│ qwen3:8b — routes, plans, dispatches     │
-│ qwen3:30b-a3b — triage, classification   │
-├──────────────────────────────────────────┤
-│ LAYER 2: INTELLIGENCE                    │
-│ qwen3:32b w/thinking → deep research     │
-│ qwen2.5-coder:32b → code generation      │
-├──────────────────────────────────────────┤
-│ LAYER 3: KNOWLEDGE                       │
-│ LanceDB — hybrid vector+BM25 search      │
-│ SQLite — metadata, checkpoints, rules    │
-│ Rules Engine — Constitutional AI         │
-└──────────────────────────────────────────┘
+Agent (ReAct Loop)
+├─ Tools: web_search, run_python, bash, read_file, write_file
+├─ Memory: Session tracking, discoveries, failures
+└─ Reflection: Pattern detection, improvement suggestions
 ```
 
-### Execution Flow
+## Self-Improvement Cycle
 
-```
-Objective → Plan (qwen3:8b)
-    ↓
-Loop (max 15 steps):
-  Think (qwen3:32b + thinking=ON)
-    ↓
-  Act (parallel tools via asyncio.gather)
-    → Tavily web search
-    → Jina Reader for content
-    → Store findings in LanceDB
-    ↓
-  Observe (update findings, compress memory at 80%)
-    ↓
-  Reflect (decide continue vs synthesize)
-    ↓
-  Enforce Rules (Constitutional AI critique)
-    ↓
-Synthesize (qwen3:32b + thinking=OFF)
-    ↓
-Output with citations
-```
+The agent iteratively:
 
-## Project Structure
-
-```
-local_llm/
-├── CLAUDE.md                 # Project instructions for AI assistants
-├── README.md                 # This file
-├── requirements.txt          # Python dependencies
-├── pyproject.toml           # Package metadata & build config
-├── pytest.ini               # Test configuration
-├── .env.example             # Environment template
-│
-├── config/
-│   ├── rules.yaml           # Constitutional AI rules (hard/soft/learning)
-│   ├── model_config.yaml    # Model role assignments
-│   └── prompts/             # Jinja2 prompt templates
-│       ├── system.j2
-│       ├── research.j2
-│       ├── reflect.j2
-│       └── rule_critique.j2
-│
-├── src/
-│   ├── llm/                 # LLM inference layer
-│   │   ├── base.py          # Abstract LLMClient
-│   │   ├── ollama_client.py # Async Ollama wrapper
-│   │   ├── mlx_client.py    # MLX backend (2x faster)
-│   │   └── router.py        # Smart model routing + constraints
-│   │
-│   ├── memory/              # Hierarchical memory system
-│   │   ├── models.py        # Pydantic data models
-│   │   ├── working.py       # FIFO in-context buffer (4K tokens)
-│   │   ├── lancedb_store.py # Vector store (hybrid search)
-│   │   ├── sqlite_store.py  # Metadata + checkpoints
-│   │   └── manager.py       # Unified memory coordinator
-│   │
-│   ├── retrieval/           # Sophisticated search
-│   │   ├── models.py        # Data structures
-│   │   ├── hyde.py          # Hypothetical Document Expansion
-│   │   ├── hybrid.py        # BM25 + vector + RRF fusion
-│   │   ├── reranker.py      # Cross-encoder reranking
-│   │   └── chunker.py       # Hierarchical chunking
-│   │
-│   ├── rules/               # Constitutional AI + self-improvement
-│   │   ├── models.py        # Rule data structures
-│   │   ├── loader.py        # YAML → XML compilation
-│   │   ├── engine.py        # Critique-revise loop
-│   │   ├── learner.py       # A/B testing + rule proposals
-│   │   └── optimizer.py     # DSPy prompt optimization
-│   │
-│   ├── agent/               # LangGraph orchestrator
-│   │   ├── state.py         # Agent state schema
-│   │   ├── core.py          # Main state machine
-│   │   └── nodes/           # Graph nodes
-│   │       ├── plan.py      # Decompose objective
-│   │       ├── think.py     # Reasoning with thinking=ON
-│   │       ├── act.py       # Tool execution
-│   │       ├── observe.py   # Store findings
-│   │       ├── reflect.py   # Compress memory + decide
-│   │       └── synthesize.py # Combine findings
-│   │
-│   └── tools/               # Tool implementations
-│       ├── web.py           # Tavily + Jina
-│       ├── memory.py        # Memory operations
-│       └── __init__.py      # Tool registry
-│
-├── scripts/
-│   ├── agent.py             # CLI: run, resume, query, review-rules, export
-│   └── setup.py             # One-shot environment setup
-│
-└── tests/
-    ├── conftest.py          # Pytest fixtures
-    ├── test_memory.py       # Memory layer tests
-    ├── test_retrieval.py    # Retrieval tests
-    ├── test_rules.py        # Rules engine tests
-    ├── test_agent.py        # Agent orchestrator tests
-    ├── test_integration.py  # Full-system tests
-    ├── fixtures/            # Test data
-    └── data/               # Static test files
-```
-
-## Commands
-
-### Run Research
-
-```bash
-python -m scripts.agent run \
-  --objective "Your research question" \
-  --max-steps 20 \
-  --model qwen3:32b \
-  --rules config/rules.yaml
-```
-
-### Resume Session
-
-```bash
-python -m scripts.agent resume --session <session_id>
-```
-
-### Query Memory
-
-```bash
-python -m scripts.agent query "What did you find about X?"
-```
-
-### Review Rules
-
-```bash
-python -m scripts.agent review-rules
-```
-
-### Optimize Rules (DSPy)
-
-```bash
-python -m scripts.agent optimize-rules
-```
-
-### Export Results
-
-```bash
-python -m scripts.agent export --session <id> --format markdown
-```
+1. **Analyzes** its own code
+2. **Plans** specific improvements
+3. **Implements** code changes
+4. **Tests** the changes
+5. **Measures** the improvement
+6. **Commits** if successful
+7. **Repeats**
 
 ## Testing
 
 ```bash
-# Run all tests
-pytest tests/ -v
-
-# With coverage
-pytest tests/ -v --cov=src --cov-report=html
-
-# Only integration tests
-pytest tests/test_integration.py -v
-
-# Only memory tests
-pytest tests/test_memory.py -v -m memory
+# Test search quality detection
+source mlx_agent_env/bin/activate
+python3 test_search_quality.py
 ```
 
-## Performance Notes
+## Measuring Progress
 
-- **Hardware constraints enforced**: Never load 2x 32B models (would be 38GB > 36GB)
-- **Context budget**: 16K tokens max
-  - System: 1KB
-  - Tools: 2KB
-  - Retrieved memory: 4KB
-  - Conversation: 4KB
-  - Workspace: 3KB
-  - Buffer: 2KB
-- **Token targets**:
-  - Orchestration: 80+ tok/s (qwen3:8b)
-  - MoE routing: 90+ tok/s (qwen3:30b-a3b)
-  - Reasoning: 15-22 tok/s (qwen3:32b)
-  - With MLX backend: 2x faster
+After each improvement cycle:
+
+```bash
+# See what files were created
+ls -lh agent_outputs/
+
+# Check code changes
+git diff agent.py reflection.py memory.py
+
+# View session memory
+ls -lh ~/.claude/sessions/
+```
 
 ## Configuration
 
-### Rules Format (`config/rules.yaml`)
+All settings in `config.py`:
 
-```yaml
-version: 1
-meta_rules:
-  - id: M1
-    priority: critical
-    rule: "When rules conflict, prefer accuracy"
-
-research_rules:
-  hard:
-    - id: R1
-      rule: "Verify claims against 2+ sources"
-  soft:
-    - id: S1
-      confidence: 0.8
-      rule: "Prefer primary sources"
-
-learning_rules: []  # Auto-generated from failures
+```python
+class AgentConfig:
+    max_iterations = 50
+    web_search_timeout = 10
+    code_execution_timeout = 30
+    max_search_results = 5
+    low_quality_threshold = 0.4  # Search relevance score
+    high_quality_threshold = 0.6
 ```
 
-### Model Assignment (`config/model_config.yaml`)
+## Improvement Ideas
 
-```yaml
-roles:
-  orchestrate:
-    primary: qwen3:8b
-    fallback: [qwen3:32b]
-  reason:
-    primary: qwen3:32b
-    thinking_enabled: true
-  code:
-    primary: qwen2.5-coder:32b
-    fallback: [qwen3:32b]
-```
+The agent can improve:
+- Loop detection (detect similar results, not just tool repeats)
+- Memory efficiency (compress old discoveries)
+- Search optimization (cache results)
+- Tool effectiveness (better Python code generation)
+- Reflection accuracy (better learning from failures)
+- Confidence scoring (know when to search vs code)
 
-## Environment Variables
+## Performance
 
-Create `.env` from `.env.example`:
+- **Model**: Qwen3-14B-4bit via MLX
+- **Speed**: ~60 tokens/second on Apple M4 Max
+- **Context**: 16,384 tokens
+- **Memory**: Efficient session-based tracking
 
-```bash
-TAVILY_API_KEY=your_key_here
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_TIMEOUT=300
-DEBUG=false
-```
+## Next Steps
 
-## Contributing
+1. Start with: `python3 self_improve.py`
+2. Watch it improve itself
+3. Check improvements in `agent_outputs/`
+4. Run more cycles: `bash run_improvement_cycles.sh 5`
 
-This project uses:
-- **Code formatting**: black (line-length: 100)
-- **Linting**: ruff
-- **Type checking**: mypy
-- **Testing**: pytest + pytest-asyncio
-- **Async**: full asyncio stack, no blocking
+## Documentation
 
-## License
-
-MIT
-
-## References
-
-- **Hardware**: Apple M4 Max (32-core GPU, 410 GB/s bandwidth, 36GB RAM)
-- **Models**: Qwen3 family (32B/8B/30B-a3b)
-- **Infrastructure**: Ollama + MLX-LM
-- **Memory**: LanceDB (hybrid search) + SQLite
-- **Orchestration**: LangGraph
-- **Rules**: Constitutional AI patterns
-- **Retrieval**: HyDE + RRF fusion
+- **SELF_IMPROVING_SYSTEM.md** - Architecture & detailed guide
+- **IMPROVEMENTS.md** - Recent enhancements
 
 ## Status
 
-- ✅ Phase 1: Foundation (CLAUDE.md, config, LLM layer)
-- ✅ Phase 2: LLM Backend (base, ollama, router)
-- 🔄 Phase 3-6: Implementation in progress (memory, retrieval, rules, agent, tests)
-- ⏳ Phase 7: Integration & validation
-- ⏳ Phase 8: Optimization & deployment
+✅ Core system ready
+✅ Self-improvement harness implemented
+✅ Quality-aware search active
+✅ Ready for continuous improvement cycles
+
+---
+
+**Last Updated**: March 21, 2026
+**System**: Self-improving autonomous agent on MLX
+**Goal**: Continuously improve its own capabilities
