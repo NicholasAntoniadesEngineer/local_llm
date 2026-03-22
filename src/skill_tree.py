@@ -80,8 +80,8 @@ class SkillTree:
         self.graph = nx.DiGraph()
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Semantic embedder (CPU to stay lightweight)
-        self.embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        # Semantic embedder (lazy-loaded to avoid GPU memory conflict with MLX)
+        self._embedder = None
 
         self._init_db()
         self._migrate_v3()
@@ -89,7 +89,7 @@ class SkillTree:
             self._seed()
         self._load_graph()
         self._scan_completed()
-        self._ensure_embeddings()
+        # Embeddings computed lazily on first similarity request
 
     # ── Database ──────────────────────────────────────────────────────────
 
@@ -200,6 +200,13 @@ class SkillTree:
 
     # ── Semantic Layer ────────────────────────────────────────────────────
 
+    @property
+    def embedder(self):
+        """Lazy-load sentence transformer to avoid GPU memory conflict with MLX."""
+        if self._embedder is None:
+            self._embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        return self._embedder
+
     def _embed(self, skill_dict: dict) -> np.ndarray:
         """Compute normalized embedding for a skill."""
         desc = f"{skill_dict.get('name', '')}: {skill_dict.get('description', '')} | Spec: {skill_dict.get('spec', '')}"
@@ -227,6 +234,7 @@ class SkillTree:
 
     def get_skill_embedding_similarity(self, skill1: str, skill2: str) -> float:
         """Cosine similarity between two skill embeddings."""
+        self._ensure_embeddings()
         e1 = self._load_embedding(skill1)
         e2 = self._load_embedding(skill2)
         if e1 is None or e2 is None:
@@ -264,10 +272,7 @@ class SkillTree:
         for p in prereqs:
             self.graph.add_edge(p, sid)
 
-        # Compute + store embedding
-        emb = self._embed(skill)
-        self._store_embedding(sid, emb)
-
+        # Embedding computed lazily (avoid loading model during seed/init)
         return sid
 
     def get_next_skill(self) -> Optional[dict]:
