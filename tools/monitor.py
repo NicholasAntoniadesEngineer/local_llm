@@ -342,22 +342,28 @@ def build_dashboard() -> Layout:
     tree_table.add_column("Size", width=8)
 
     try:
-        from src.skill_tree import SkillTree
-        _tree = SkillTree()
-        state = _tree.get_state()
-        for sk in state["skills"]:
-            fpath = Path(f"./skills/{sk['file']}")
-            s = sk["status"]
-            if s == "completed":
-                st = "[green]DONE[/]"
-            elif s == "failing":
-                st = "[red]FAIL[/]"
-            elif sk["unlocked"]:
-                st = "[yellow]NEXT[/]"
-            else:
-                st = "[dim]LOCK[/]"
-            sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
-            tree_table.add_row(f"T{sk['tier']} {sk['name']}", st, sz)
+        import sqlite3 as _sql
+        db = Path("./runs/skill_tree.db")
+        if db.exists():
+            conn = _sql.connect(str(db))
+            conn.row_factory = _sql.Row
+            for r in conn.execute("SELECT * FROM skills ORDER BY tier, current_impact DESC"):
+                fpath = Path(f"./skills/{r['file']}")
+                s = r["status"]
+                if s == "completed":
+                    st = "[green]DONE[/]"
+                elif s == "failing":
+                    st = "[red]FAIL[/]"
+                elif s == "locked":
+                    st = "[dim]LOCK[/]"
+                else:
+                    st = "[yellow]NEXT[/]"
+                sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
+                fl = f" {r['fail_count']}F" if r['fail_count'] > 0 else ""
+                tree_table.add_row(f"T{r['tier']} {r['name']}{fl}", st, sz)
+            conn.close()
+        else:
+            tree_table.add_row("(no DB yet)", "", "")
     except Exception as e:
         tree_table.add_row(f"Error: {e}", "", "")
 

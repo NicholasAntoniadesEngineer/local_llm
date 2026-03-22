@@ -21,3 +21,7 @@ runs/*/stream_history.txt
 
 # Model cache
 .cache/
+failing_test.py
+missing_import.py
+syntax_error.py
+valid.py
