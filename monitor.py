@@ -208,12 +208,38 @@ def build_dashboard() -> Layout:
     hw_table.add_row("Free", f"{mem['free_gb']:.1f} GB")
     hw_table.add_row("Bandwidth", "546 GB/s")
 
+    # GPU usage from Metal - MLX runs on GPU not CPU
+    try:
+        gpu_result = subprocess.run(
+            ["ioreg", "-r", "-d", "1", "-c", "AppleARMIODevice", "-n", "gpu"],
+            capture_output=True, text=True, timeout=2,
+        )
+        # Fallback: estimate from bandwidth utilization
+        bw = perf.get("bandwidth_used_gbs", 0)
+        if bw > 0:
+            gpu_est = min(100, round(bw / 546 * 100))
+            hw_table.add_row("GPU (est)", f"{gpu_est}% (Metal)")
+        else:
+            hw_table.add_row("GPU", "[dim]idle[/] (Metal)")
+    except Exception:
+        hw_table.add_row("GPU", "[dim]Metal[/]")
+    hw_table.add_row("[dim]Note", "[dim]CPU is low because MLX uses GPU[/]")
+
     if proc.get("running"):
         hw_table.add_row("", "")
         hw_table.add_row("Agent Status", "[bold green]RUNNING[/]")
         hw_table.add_row("PID", str(proc["pid"]))
         hw_table.add_row("CPU", f"{proc['cpu']:.1f}%")
         hw_table.add_row("Agent RAM", f"{proc['mem_mb']:.0f} MB ({proc['mem_pct']:.1f}%)")
+        # Context usage in hardware panel
+        ctx_pct = perf.get("context_pct", 0)
+        if ctx_pct > 80:
+            ctx_color = "red"
+        elif ctx_pct > 50:
+            ctx_color = "yellow"
+        else:
+            ctx_color = "green"
+        hw_table.add_row("Context", f"[{ctx_color}]{ctx_pct}% of {perf.get('context_window', 32768):,}[/]")
     else:
         hw_table.add_row("", "")
         hw_table.add_row("Agent Status", "[bold red]STOPPED[/]")
@@ -234,12 +260,29 @@ def build_dashboard() -> Layout:
         else:
             speed_str = f"[red]{gen_s} tok/s[/]"
 
-        tok_table.add_row("Gen Speed", speed_str)
-        tok_table.add_row("Average", f"{perf.get('avg_tok_s', 0)} tok/s")
+        if perf.get("generating"):
+            tok_table.add_row("Status", "[bold green]GENERATING...[/]")
+
+        # Decode speed - estimate from gen_tok_s if decode_tok_s not available
+        decode_s = perf.get("decode_tok_s", 0)
+        if not decode_s and gen_s > 0:
+            # Estimate: overall includes prefill overhead
+            prompt_t = perf.get("prompt_tokens", 0)
+            gen_t = perf.get("gen_tokens", 0)
+            elapsed = perf.get("elapsed", 1)
+            prefill_est = prompt_t / 286.0
+            decode_est = max(0.1, elapsed - prefill_est)
+            decode_s = round(gen_t / decode_est, 1) if gen_t > 0 else gen_s
+
+        tok_table.add_row("Decode Speed", f"[bold green]{decode_s} tok/s[/] / 41 max")
+        tok_table.add_row("Efficiency", f"{round(decode_s / 41 * 100)}%")
+        tok_table.add_row("Overall", speed_str)
         tok_table.add_row("Peak", f"{perf.get('peak_tok_s', 0)} tok/s")
+
         bw = perf.get("bandwidth_used_gbs", 0)
-        bw_pct = round(bw / 546 * 100, 1) if bw else 0
-        tok_table.add_row("Bandwidth", f"{bw} GB/s ({bw_pct}% of 546)")
+        if not bw and gen_s > 0:
+            bw = round(8.0 * gen_s, 1)
+        tok_table.add_row("Bandwidth", f"{bw} GB/s ({round(bw/546*100, 1)}%)")
         tok_table.add_row("", "")
         tok_table.add_row("Prompt (last)", f"{perf.get('prompt_tokens', 0):,} tokens")
         tok_table.add_row("Generated (last)", f"{perf.get('gen_tokens', 0):,} tokens")
@@ -304,19 +347,38 @@ def build_dashboard() -> Layout:
     try:
         sf = Path("./agent_outputs/.stream.txt")
         if sf.exists() and (time.time() - sf.stat().st_mtime) < 30:
-            stream_text = sf.read_text()[-2000:]
+            raw = sf.read_text()
+            raw = raw.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "  ")
+            stream_text = raw[-3000:]
         else:
             stream_text = "(idle - waiting for generation)"
     except Exception:
         stream_text = "(error)"
-    stream_text = stream_text.replace("[", "\\[").replace("\\n", "\n")
+    stream_text = stream_text.replace("[", "\\[")
     stream_display = Text(stream_text)
 
     # ── Agent Log ──
     try:
         with open("/tmp/improve_loop.log") as f:
             log_lines = f.readlines()
-        log_raw = "".join(log_lines[-25:])[-2000:]
+        formatted = []
+        for line in log_lines[-40:]:
+            line = line.rstrip()
+            if not line:
+                continue
+            if "CYCLE #" in line or "====" in line:
+                formatted.append(f"\n{line}")
+            elif "BUILDING:" in line or "VALIDATING:" in line:
+                formatted.append(f"\n>> {line}")
+            elif "PASSED" in line or "FAILED" in line:
+                formatted.append(f"   {line}")
+            elif "tok/s" in line:
+                formatted.append(f"   {line}")
+            elif "Step" in line and "Phase" in line:
+                formatted.append(f"\n{line}")
+            else:
+                formatted.append(line)
+        log_raw = "\n".join(formatted)[-3000:]
     except Exception:
         log_raw = "(no log)"
     log_raw = log_raw.replace("[", "\\[")

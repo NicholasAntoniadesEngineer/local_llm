@@ -213,11 +213,44 @@ class MLXAgent:
                 for chunk in self._stream_generate(self.model, self.tokenizer, **kwargs):
                     token_count += 1
                     response_parts.append(chunk.text)
-                    # Write partial output every 50 tokens (less I/O = faster generation)
-                    if token_count % 50 == 0:
+                    # Stream file every 10 tokens, perf stats every 100
+                    if token_count % 10 == 0:
+                        elapsed_so_far = _time.perf_counter() - t0
+                        live_tok_s = token_count / max(0.01, elapsed_so_far)
                         try:
                             with open(stream_file, "w") as sf:
                                 sf.write("".join(response_parts))
+                        except Exception:
+                            pass
+                    # Perf stats less frequently (heavy JSON write)
+                    if token_count % 100 == 0:
+                        try:
+                            live_stats = {
+                                "gen_tok_s": round(live_tok_s, 1),
+                                "avg_tok_s": round(live_tok_s, 1),
+                                "peak_tok_s": round(max(self._perf.get("peak_tok_s", 0), live_tok_s), 1),
+                                "prompt_tokens": prompt_tokens,
+                                "gen_tokens": token_count,
+                                "total_gen_tokens": self._perf["total_tokens"] + token_count,
+                                "total_prompt_tokens": self._perf.get("prompt_tokens", 0) + prompt_tokens,
+                                "total_all_tokens": self._perf["total_tokens"] + token_count + self._perf.get("prompt_tokens", 0) + prompt_tokens,
+                                "elapsed": round(elapsed_so_far, 1),
+                                "total_time": round(self._perf["total_gen_time"] + elapsed_so_far, 1),
+                                "step": len(self._perf["step_times"]) + 1,
+                                "context_used": prompt_tokens + token_count,
+                                "context_window": self.config_model.context_window,
+                                "context_pct": round((prompt_tokens + token_count) / self.config_model.context_window * 100, 1),
+                                "model": self.config_model.name.split("/")[-1],
+                                "max_tokens": self.config_model.max_tokens,
+                                "tool_calls": self._perf["tool_success"]["total"],
+                                "tool_success": self._perf["tool_success"]["success"],
+                                "tool_success_rate": round(self._perf["tool_success"]["success"] / max(1, self._perf["tool_success"]["total"]) * 100, 0),
+                                "avg_step_time": round((self._perf["total_gen_time"] + elapsed_so_far) / max(1, len(self._perf["step_times"]) + 1), 1),
+                                "bandwidth_used_gbs": round(8.0 * live_tok_s, 1),
+                                "generating": True,
+                            }
+                            with open(CONFIG.output_dir / ".perf_stats.json", "w") as pf:
+                                json.dump(live_stats, pf)
                         except Exception:
                             pass
                 response = "".join(response_parts)
@@ -237,10 +270,9 @@ class MLXAgent:
 
             elapsed = _time.perf_counter() - t0
 
-            # Token counting
-            gen_tokens = len(self.tokenizer.encode(response)) if hasattr(self.tokenizer, 'encode') else max(1, len(response) // 4)
+            # Token counting - use stream token_count if available, else estimate
+            gen_tokens = token_count if token_count > 0 else max(1, len(response) // 4)
             gen_tok_s = gen_tokens / max(0.01, elapsed)
-            prompt_tok_s = prompt_tokens / max(0.01, elapsed)
 
             self._perf["total_tokens"] += gen_tokens
             self._perf["total_gen_time"] += elapsed
@@ -258,6 +290,11 @@ class MLXAgent:
 
             stats = {
                 "gen_tok_s": round(gen_tok_s, 1),
+                "decode_tok_s": round(true_decode_tok_s, 1),
+                "decode_max": 41.0,  # measured raw MLX ceiling
+                "decode_efficiency": round(true_decode_tok_s / 41.0 * 100, 0),
+                "prefill_time_s": round(est_prefill_time, 1),
+                "decode_time_s": round(est_decode_time, 1),
                 "avg_tok_s": round(avg_tok_s, 1),
                 "peak_tok_s": round(max(
                     self._perf.get("peak_tok_s", 0), gen_tok_s
@@ -283,6 +320,7 @@ class MLXAgent:
                 # Bandwidth = model_size_bytes × tokens_generated / time
                 # 14B at 4-bit ≈ 8GB weights read per token generated
                 "bandwidth_used_gbs": round(8.0 * gen_tok_s, 1),
+                "generating": False,
             }
             self._perf["peak_tok_s"] = stats["peak_tok_s"]
             try:
@@ -291,7 +329,11 @@ class MLXAgent:
             except Exception:
                 pass
 
-            print(f"  ⚡ {gen_tok_s:.0f} gen tok/s | {prompt_tokens} prompt + {gen_tokens} gen tokens | {elapsed:.1f}s")
+            # Estimate true decode speed (exclude prefill time)
+            est_prefill_time = prompt_tokens / 286.0  # measured prefill rate
+            est_decode_time = max(0.1, elapsed - est_prefill_time)
+            true_decode_tok_s = gen_tokens / est_decode_time
+            print(f"  ⚡ {true_decode_tok_s:.0f} tok/s decode ({gen_tok_s:.0f} overall) | {prompt_tokens}p+{gen_tokens}g | {elapsed:.1f}s (prefill:{est_prefill_time:.0f}s)")
             self.logger.generation(
                 step=len(self._perf["step_times"]),
                 prompt_tokens=prompt_tokens, gen_tokens=gen_tokens,
