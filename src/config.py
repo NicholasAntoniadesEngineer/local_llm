@@ -32,15 +32,20 @@ CONFIG = AgentConfig(
         "balanced": ModelConfig(
             name="mlx-community/Qwen3-30B-A3B-4bit",
             max_tokens=4096,
-            context_window=65_536,
+            context_window=32_768,
         ),
         "quality": ModelConfig(
             name="mlx-community/Qwen3-32B-4bit",
             max_tokens=4096,
-            context_window=65_536,
+            context_window=32_768,
         ),
-        # 14B with 16K context - 8GB model + ~4GB KV cache = ~12GB
-        # Conservative to prevent Metal GPU kernel panics
+        # Qwen3.5-35B MoE: 18GB weights + 8GB KV = 26GB, leaves 10GB headroom
+        # Smartest model that fits on 36GB M4 Max (March 2026)
+        "smart": ModelConfig(
+            name="mlx-community/Qwen3.5-35B-A3B-4bit",
+            max_tokens=4096,
+            context_window=32_768,
+        ),
         "tool_calling": ModelConfig(
             name="mlx-community/Qwen3-14B-4bit",
             max_tokens=4096,
