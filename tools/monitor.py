@@ -427,22 +427,23 @@ def build_dashboard() -> Layout:
         expand=True,
     )
 
-    # Layout: rows stacked vertically
-    # Row 1: Model | Hardware
-    # Row 2: Agent | Performance
-    # Row 3: SkillTree | Cycles
-    # Row 4: Agent Logs + Terminal Output (full width)
+    # Make all tables full width
+    for t in [model_table, hw_table, agent_table, perf_table, brain_table, cycle_table]:
+        t.expand = True
+
+    # Layout: paired rows, each spanning full terminal width
     row1 = Layout(name="row1", size=10)
-    row1.split_row(Layout(model_table), Layout(hw_table))
+    row1.split_row(Layout(model_table, ratio=1), Layout(hw_table, ratio=1))
 
     row2 = Layout(name="row2", size=8)
-    row2.split_row(Layout(agent_table), Layout(perf_table))
+    row2.split_row(Layout(agent_table, ratio=1), Layout(perf_table, ratio=1))
 
     row3 = Layout(name="row3", size=9)
-    row3.split_row(Layout(brain_table), Layout(cycle_table))
+    row3.split_row(Layout(brain_table, ratio=1), Layout(cycle_table, ratio=1))
 
-    row4 = Layout(name="row4", ratio=1)
-    row4.split_row(Layout(logs_panel), Layout(raw_panel))
+    # Full-width logs at bottom
+    row4 = Layout(name="row4", size=12)
+    row4.split_row(Layout(logs_panel, ratio=1), Layout(raw_panel, ratio=1))
 
     layout.split(
         Layout(header, name="header", size=3),
