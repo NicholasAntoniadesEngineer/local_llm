@@ -324,46 +324,57 @@ def get_next_skill() -> Skill:
     return candidates[0][1]
 
 
-def get_full_codebase_dump() -> str:
-    """Dump the FULL content of every essential file for injection into context.
+def get_full_codebase_dump(token_budget: int = 4000) -> str:
+    """Dump codebase into context, staying within token budget.
 
-    Skips non-essential files (monitor.py, setup.py, test stubs) to stay
-    within context budget. The agent sees REAL CODE, not summaries.
+    Priority: agent_outputs (what we're building on) > config/memory > agent.py (large)
+    Agent.py is summarized since it's 600+ lines and the agent doesn't modify it.
     """
-    # Core files the agent MUST understand to improve the system
-    essential_core = ["agent.py", "config.py", "memory.py", "skill_tree.py", "improve.py", "logger.py"]
-    # Skip: monitor.py (display only), setup.py (one-time), test stubs
-
     lines = []
+    used_tokens = 0
 
-    for fname in essential_core:
-        f = Path(fname)
+    def add_file(path: str, full: bool = True):
+        nonlocal used_tokens
+        f = Path(path)
         if not f.exists():
-            continue
-        try:
-            content = f.read_text()
-            lines.append(f"\n{'='*60}")
-            lines.append(f"FILE: {fname} ({len(content.splitlines())} lines)")
-            lines.append(f"{'='*60}")
+            return
+        content = f.read_text()
+        est_tokens = len(content) // 4
+        if not full or (used_tokens + est_tokens > token_budget):
+            # Summary only
+            loc = len(content.splitlines())
+            classes = [l.strip().split("(")[0].replace("class ", "") for l in content.splitlines() if l.strip().startswith("class ")]
+            funcs = [l.strip().split("(")[0].replace("def ", "") for l in content.splitlines() if l.strip().startswith("def ")]
+            summary = f"\nFILE: {path} ({loc} lines) [SUMMARY - too large for full context]"
+            summary += f"\n  Classes: {', '.join(classes[:10])}" if classes else ""
+            summary += f"\n  Functions: {', '.join(funcs[:15])}" if funcs else ""
+            lines.append(summary)
+            used_tokens += len(summary) // 4
+        else:
+            lines.append(f"\nFILE: {path} ({len(content.splitlines())} lines)")
             lines.append(content)
-        except Exception:
-            pass
+            used_tokens += est_tokens
 
-    # ALL agent outputs - full content
+    # Priority 1: config + memory (small, essential)
+    add_file("config.py", full=True)
+    add_file("memory.py", full=True)
+
+    # Priority 2: all agent outputs (what we're building on)
     output_dir = Path("./agent_outputs")
     if output_dir.exists():
         for f in sorted(output_dir.glob("*.py")):
             if f.name.startswith("."):
                 continue
-            try:
-                content = f.read_text()
-                lines.append(f"\n{'='*60}")
-                lines.append(f"FILE: agent_outputs/{f.name} ({len(content.splitlines())} lines)")
-                lines.append(f"{'='*60}")
-                lines.append(content)
-            except Exception:
-                pass
+            add_file(f"agent_outputs/{f.name}", full=True)
 
+    # Priority 3: agent.py (large - summary only to save tokens)
+    add_file("agent.py", full=False)
+
+    # Priority 4: other core files if budget remains
+    for fname in ["logger.py", "skill_tree.py", "improve.py"]:
+        add_file(fname, full=False)
+
+    lines.insert(0, f"[Codebase: ~{used_tokens} tokens loaded, {token_budget} budget]")
     return "\n".join(lines)
 
 
@@ -416,13 +427,18 @@ def build_goal_for_skill(skill: Skill, state: dict) -> str:
     tree_text = get_tree_as_text()
     tier_name = {1: "Foundation", 2: "Intelligence", 3: "Integration", 4: "Optimization"}
 
-    return f"""You are a self-improving AI agent. Below is your ENTIRE codebase.
-You already have all the code - do NOT use read_file for these files.
-Go straight to writing your improvement.
+    # Only include prereq files in full, not everything
+    prereq_files = [SKILLS[p].file for p in skill.prereqs if p in SKILLS]
 
+    return f"""You are a self-improving AI agent.
+
+=== KEY SOURCE FILES ===
 {full_code}
 
-=== YOUR SKILL TREE ===
+=== PREREQ MODULES YOU CAN IMPORT ===
+{chr(10).join(f"from {Path(pf).stem} import *  # agent_outputs/{pf}" for pf in prereq_files) if prereq_files else "(none - this is a foundation skill)"}
+
+=== SKILL TREE ===
 {tree_text}
 
 === YOUR CURRENT TASK ===

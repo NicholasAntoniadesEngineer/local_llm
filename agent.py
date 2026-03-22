@@ -192,11 +192,12 @@ class MLXAgent:
         try:
             t0 = _time.perf_counter()
 
-            # Build kwargs with all optimizations
+            # Build kwargs with all optimizations for max tok/s
             kwargs = {
                 "prompt": prompt,
                 "max_tokens": self.config_model.max_tokens,
-                "sampler": self._sampler,  # greedy = fastest
+                "sampler": self._sampler,           # greedy argmax = fastest decode
+                "prefill_step_size": 4096,          # 2x faster prompt processing vs default 512
             }
             if self._prompt_cache:
                 kwargs["prompt_cache"] = self._prompt_cache
@@ -212,8 +213,8 @@ class MLXAgent:
                 for chunk in self._stream_generate(self.model, self.tokenizer, **kwargs):
                     token_count += 1
                     response_parts.append(chunk.text)
-                    # Write partial output every 5 tokens
-                    if token_count % 5 == 0:
+                    # Write partial output every 50 tokens (less I/O = faster generation)
+                    if token_count % 50 == 0:
                         try:
                             with open(stream_file, "w") as sf:
                                 sf.write("".join(response_parts))

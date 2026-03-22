@@ -51,3 +51,4 @@ logs/
 # Temporary
 *.tmp
 /tmp/
+mlx_agent_env/

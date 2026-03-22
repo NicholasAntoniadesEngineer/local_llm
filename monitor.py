@@ -309,7 +309,7 @@ def build_dashboard() -> Layout:
             stream_text = "(idle - waiting for generation)"
     except Exception:
         stream_text = "(error)"
-    stream_text = stream_text.replace("[", "\\[")
+    stream_text = stream_text.replace("[", "\\[").replace("\\n", "\n")
     stream_display = Text(stream_text)
 
     # ── Agent Log ──
