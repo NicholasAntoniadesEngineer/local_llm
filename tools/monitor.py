@@ -207,7 +207,7 @@ def get_perf() -> dict:
             "tokens_per_sec": round(latest_tok_s, 1),
             "peak_tok_s": round(peak_tok_s, 1),
             "context_fill_pct": context_fill,
-            "gb_per_sec": round(latest_tok_s * 0.004, 2) if latest_tok_s else "?"  # rough estimate
+            "gb_per_sec": round(latest_tok_s * 7.5, 1) if latest_tok_s else "?"  # model_size_gb * decode_tok_s
         }
     except Exception:
         return {}
