@@ -39,10 +39,17 @@ CONFIG = AgentConfig(
             max_tokens=4096,
             context_window=32_768,
         ),
-        # Qwen3.5-35B MoE: 18GB weights + 8GB KV = 26GB, leaves 10GB headroom
-        # Smartest model that fits on 36GB M4 Max (March 2026)
+        # Nemotron-Cascade-2: NVIDIA MoE, 17.8GB, beats Qwen3.5-35B on coding
+        # Released March 20, 2026. Gold on IMO+IOI 2025.
+        # LiveCodeBench 87.2 vs 74.6, same memory as Qwen3-30B-A3B
         "smart": ModelConfig(
-            name="mlx-community/Qwen3.5-35B-A3B-4bit",
+            name="mlx-community/Nemotron-Cascade-2-30B-A3B-4bit",
+            max_tokens=4096,
+            context_window=32_768,
+        ),
+        # Qwen3-Coder: purpose-built for coding agents, 256K context
+        "coder": ModelConfig(
+            name="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit",
             max_tokens=4096,
             context_window=32_768,
         ),
