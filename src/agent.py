@@ -13,8 +13,11 @@ import subprocess
 import re
 import os
 import sys
+import gc
 from pathlib import Path
 from typing import Optional
+
+import mlx.core as mx
 
 from src.config import CONFIG
 from src.memory import MemoryManager
@@ -343,6 +346,10 @@ class MLXAgent:
                 tok_s=gen_tok_s, elapsed=elapsed,
                 response_preview=response[:200],
             )
+
+            # Free GPU memory to prevent Metal kernel panic (IOGPUMemory OOM)
+            mx.metal.clear_cache()
+            gc.collect()
 
             # Strip thinking blocks
             response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
