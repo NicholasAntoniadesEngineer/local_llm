@@ -281,6 +281,11 @@ class MLXAgent:
 
             avg_tok_s = self._perf["total_tokens"] / max(0.01, self._perf["total_gen_time"])
 
+            # Estimate true decode speed (exclude prefill time)
+            est_prefill_time = prompt_tokens / 286.0
+            est_decode_time = max(0.1, elapsed - est_prefill_time)
+            true_decode_tok_s = gen_tokens / est_decode_time
+
             # Write stats to file for monitor to read
             total_steps = len(self._perf["step_times"])
             tool_total = self._perf["tool_success"]["total"]
@@ -291,7 +296,7 @@ class MLXAgent:
             stats = {
                 "gen_tok_s": round(gen_tok_s, 1),
                 "decode_tok_s": round(true_decode_tok_s, 1),
-                "decode_max": 41.0,  # measured raw MLX ceiling
+                "decode_max": 41.0,
                 "decode_efficiency": round(true_decode_tok_s / 41.0 * 100, 0),
                 "prefill_time_s": round(est_prefill_time, 1),
                 "decode_time_s": round(est_decode_time, 1),
@@ -329,11 +334,7 @@ class MLXAgent:
             except Exception:
                 pass
 
-            # Estimate true decode speed (exclude prefill time)
-            est_prefill_time = prompt_tokens / 286.0  # measured prefill rate
-            est_decode_time = max(0.1, elapsed - est_prefill_time)
-            true_decode_tok_s = gen_tokens / est_decode_time
-            print(f"  ⚡ {true_decode_tok_s:.0f} tok/s decode ({gen_tok_s:.0f} overall) | {prompt_tokens}p+{gen_tokens}g | {elapsed:.1f}s (prefill:{est_prefill_time:.0f}s)")
+            print(f"  ⚡ {true_decode_tok_s:.0f} tok/s decode ({gen_tok_s:.0f} overall) | {prompt_tokens}p+{gen_tokens}g | {elapsed:.1f}s")
             self.logger.generation(
                 step=len(self._perf["step_times"]),
                 prompt_tokens=prompt_tokens, gen_tokens=gen_tokens,
