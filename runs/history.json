@@ -97,8 +97,43 @@
       "passed": true,
       "reason": "Tests passed (2,899B)",
       "timestamp": "2026-03-22T16:41:26.482429"
+    },
+    {
+      "cycle": 1,
+      "target": "unknown",
+      "passed": false,
+      "reason": "name 'tool_history' is not defined",
+      "timestamp": "2026-03-22T21:38:38.351429"
+    },
+    {
+      "cycle": 2,
+      "target": "unknown",
+      "passed": false,
+      "reason": "name 'tool_history' is not defined",
+      "timestamp": "2026-03-22T21:39:24.603087"
+    },
+    {
+      "cycle": 1,
+      "target": "smart_router.py",
+      "passed": false,
+      "reason": "Tests failed: Traceback (most recent call last):\n  File \"/Users/nicholasantoniades/Documents/GitHub/",
+      "timestamp": "2026-03-22T21:54:06.218198"
+    },
+    {
+      "cycle": 1,
+      "target": "smart_router.py",
+      "passed": true,
+      "reason": "Tests passed (3,501B)",
+      "timestamp": "2026-03-22T21:59:24.352940"
+    },
+    {
+      "cycle": 1,
+      "target": "orchestrator.py",
+      "passed": true,
+      "reason": "Tests passed (1,563B)",
+      "timestamp": "2026-03-22T22:16:20.330463"
     }
   ],
-  "total_passed": 14,
-  "total_failed": 0
+  "total_passed": 16,
+  "total_failed": 3
 }
