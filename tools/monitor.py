@@ -342,9 +342,9 @@ def build_dashboard() -> Layout:
     )
 
     # Model
-    model_table = Table(title="Model", expand=True, box=box.ROUNDED)
-    model_table.add_column("", style="cyan", width=20)
-    model_table.add_column("", style="green")
+    model_table = Table(title="Model", expand=False, box=box.ROUNDED, padding=(0, 1))
+    model_table.add_column("", style="cyan", width=14, no_wrap=True)
+    model_table.add_column("", style="green", max_width=40)
     model_table.add_row("Name", model.get("short_name", "—"))
     model_table.add_row("Full ID", model.get("name", "—"))
     model_table.add_row("Profile", model.get("profile", "—"))
@@ -353,17 +353,17 @@ def build_dashboard() -> Layout:
     model_table.add_row("Max Tokens", f"{model.get('max_tokens', 0):,} tokens")
 
     # Hardware
-    hw_table = Table(title="Hardware (realtime)", expand=True, box=box.ROUNDED)
-    hw_table.add_column("", style="cyan", width=20)
-    hw_table.add_column("", style="green")
+    hw_table = Table(title="Hardware", expand=False, box=box.ROUNDED, padding=(0, 1))
+    hw_table.add_column("", style="cyan", width=10, no_wrap=True)
+    hw_table.add_column("", style="green", max_width=25)
     hw_table.add_row("Total RAM", f"{mem['total_gb']:.1f} GB")
     hw_table.add_row("Used", f"{mem['used_gb']:.1f} GB ({mem['percent']}%)")
     hw_table.add_row("Free", f"{mem['free_gb']:.1f} GB")
 
     # Agent Process
-    agent_table = Table(title="Agent Process", expand=True, box=box.ROUNDED)
-    agent_table.add_column("", style="cyan", width=20)
-    agent_table.add_column("", style="green")
+    agent_table = Table(title="Agent", expand=False, box=box.ROUNDED, padding=(0, 1))
+    agent_table.add_column("", style="cyan", width=10, no_wrap=True)
+    agent_table.add_column("", style="green", max_width=20)
     if proc.get("running"):
         agent_table.add_row("Status", "[bold green]RUNNING[/]")
         agent_table.add_row("PID", proc.get("pid", "—"))
@@ -373,9 +373,9 @@ def build_dashboard() -> Layout:
         agent_table.add_row("Status", "[bold red]NOT RUNNING[/]")
 
     # SkillTree v3 Brain
-    brain_table = Table(title="SkillTree v3 – Autonomous Brain", expand=True, box=box.ROUNDED)
-    brain_table.add_column("", style="cyan", width=22)
-    brain_table.add_column("", style="magenta")
+    brain_table = Table(title="SkillTree v3", expand=False, box=box.ROUNDED, padding=(0, 1))
+    brain_table.add_column("", style="cyan", width=14, no_wrap=True)
+    brain_table.add_column("", style="magenta", max_width=40)
     brain_table.add_row("Next Skill (UCB1)", f"[bold]{brain['next_skill']}[/] (impact {brain['next_impact']})")
     brain_table.add_row("Pull Count", str(brain['pull_count']))
     brain_table.add_row("Critical Path", brain['critical_path'] or "—")
@@ -383,18 +383,18 @@ def build_dashboard() -> Layout:
     brain_table.add_row("Evolution", "[bold green]ENABLED[/]" if brain['evolution_enabled'] else "[dim]v2[/]")
 
     # Token Performance (NOW FIXED)
-    perf_table = Table(title="Token Performance (LIVE)", expand=True, box=box.ROUNDED)
-    perf_table.add_column("", style="cyan", width=20)
-    perf_table.add_column("", style="green")
+    perf_table = Table(title="Performance", expand=False, box=box.ROUNDED, padding=(0, 1))
+    perf_table.add_column("", style="cyan", width=14, no_wrap=True)
+    perf_table.add_column("", style="green", max_width=20)
     perf_table.add_row("Tokens/s", f"{perf.get('tokens_per_sec', '?')}")
     perf_table.add_row("Peak Tokens/s", f"{perf.get('peak_tok_s', '?')}")
     perf_table.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
     perf_table.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
 
     # Self-Improvement Cycles
-    cycle_table = Table(title="Self-Improvement Cycles", expand=True, box=box.ROUNDED)
-    cycle_table.add_column("", style="cyan", width=20)
-    cycle_table.add_column("", style="green")
+    cycle_table = Table(title="Cycles", expand=False, box=box.ROUNDED, padding=(0, 1))
+    cycle_table.add_column("", style="cyan", width=10, no_wrap=True)
+    cycle_table.add_column("", style="green", max_width=10)
     cycle_table.add_row("Total Cycles", str(stats["cycles"]))
     cycle_table.add_row("PASSED", f"[green]{stats['passed']}[/]")
     cycle_table.add_row("FAILED", f"[red]{stats['failed']}[/]")
