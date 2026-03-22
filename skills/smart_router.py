@@ -1,8 +1,6 @@
 import difflib
 from typing import List, Tuple, Optional
 import json
-from src.memory import SessionMemory
-from src.config import AgentConfig
 from confidence_scorer import ConfidenceScorer
 from loop_detector import LoopDetector
 from task_planner import TaskPlanner
