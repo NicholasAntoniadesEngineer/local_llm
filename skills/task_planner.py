@@ -1,7 +1,7 @@
 import json
 from typing import List, Dict, Optional
-from memory import SessionMemory
-from config import AgentConfig
+from src.memory import SessionMemory
+from src.config import AgentConfig
 
 class TaskPlanner:
     def __init__(self, goal: str):

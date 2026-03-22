@@ -16,9 +16,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from config import CONFIG
-from memory import MemoryManager
-from logger import AgentLogger
+from src.config import CONFIG
+from src.memory import MemoryManager
+from src.logger import AgentLogger
 
 
 # Tool definitions in OpenAI-compatible format (what Qwen3 was trained on)
@@ -205,7 +205,7 @@ class MLXAgent:
                 kwargs["draft_model"] = self._draft_model
 
             # Stream tokens to file for real-time monitoring
-            stream_file = CONFIG.output_dir / ".stream.txt"
+            stream_file = self.logger.run_dir / "stream.txt"
             response_parts = []
             token_count = 0
 
@@ -249,7 +249,7 @@ class MLXAgent:
                                 "bandwidth_used_gbs": round(8.0 * live_tok_s, 1),
                                 "generating": True,
                             }
-                            with open(CONFIG.output_dir / ".perf_stats.json", "w") as pf:
+                            with open(self.logger.run_dir / "perf.json", "w") as pf:
                                 json.dump(live_stats, pf)
                         except Exception:
                             pass
@@ -258,7 +258,7 @@ class MLXAgent:
                 try:
                     with open(stream_file, "w") as sf:
                         sf.write(response)
-                    with open(CONFIG.output_dir / ".stream_history.txt", "a") as hf:
+                    with open(self.logger.run_dir / "stream_history.txt", "a") as hf:
                         hf.write(f"\n--- Step {len(self._perf['step_times'])+1} ---\n")
                         hf.write(response)
                         hf.write("\n")
@@ -324,7 +324,7 @@ class MLXAgent:
             }
             self._perf["peak_tok_s"] = stats["peak_tok_s"]
             try:
-                with open(CONFIG.output_dir / ".perf_stats.json", "w") as f:
+                with open(self.logger.run_dir / "perf.json", "w") as f:
                     json.dump(stats, f)
             except Exception:
                 pass
@@ -549,7 +549,7 @@ class MLXAgent:
         # Resolve path
         if os.path.isabs(path):
             full_path = Path(path)
-        elif "agent_outputs" in path:
+        elif "skills" in path:
             full_path = Path(path)
         else:
             full_path = CONFIG.output_dir / path

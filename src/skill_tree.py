@@ -266,7 +266,7 @@ SKILLS = {
 
 def get_system_state() -> dict:
     """Scan what's built and what's passing."""
-    output_dir = Path("./agent_outputs")
+    output_dir = Path("./skills")
     state = {"passing": set(), "failing": set(), "missing": set()}
 
     for skill_id, skill in SKILLS.items():
@@ -327,7 +327,7 @@ def get_next_skill() -> Skill:
 def get_full_codebase_dump(token_budget: int = 4000) -> str:
     """Dump codebase into context, staying within token budget.
 
-    Priority: agent_outputs (what we're building on) > config/memory > agent.py (large)
+    Priority: skills (what we're building on) > config/memory > agent.py (large)
     Agent.py is summarized since it's 600+ lines and the agent doesn't modify it.
     """
     lines = []
@@ -360,12 +360,12 @@ def get_full_codebase_dump(token_budget: int = 4000) -> str:
     add_file("memory.py", full=True)
 
     # Priority 2: all agent outputs (what we're building on)
-    output_dir = Path("./agent_outputs")
+    output_dir = Path("./skills")
     if output_dir.exists():
         for f in sorted(output_dir.glob("*.py")):
             if f.name.startswith("."):
                 continue
-            add_file(f"agent_outputs/{f.name}", full=True)
+            add_file(f"skills/{f.name}", full=True)
 
     # Priority 3: agent.py (large - summary only to save tokens)
     add_file("agent.py", full=False)
@@ -388,12 +388,12 @@ def get_full_codebase_summary() -> str:
             lines.append(f"  {f.name} ({loc} lines)")
         except Exception:
             pass
-    output_dir = Path("./agent_outputs")
+    output_dir = Path("./skills")
     if output_dir.exists():
         for f in sorted(output_dir.glob("*.py")):
             if f.name.startswith("."):
                 continue
-            lines.append(f"  agent_outputs/{f.name}")
+            lines.append(f"  skills/{f.name}")
     return "\n".join(lines)
 
 
@@ -436,7 +436,7 @@ def build_goal_for_skill(skill: Skill, state: dict) -> str:
 {full_code}
 
 === PREREQ MODULES YOU CAN IMPORT ===
-{chr(10).join(f"from {Path(pf).stem} import *  # agent_outputs/{pf}" for pf in prereq_files) if prereq_files else "(none - this is a foundation skill)"}
+{chr(10).join(f"from {Path(pf).stem} import *  # skills/{pf}" for pf in prereq_files) if prereq_files else "(none - this is a foundation skill)"}
 
 === SKILL TREE ===
 {tree_text}
@@ -455,23 +455,23 @@ TEST REQUIREMENTS:
 === EXPANDING THE SYSTEM ===
 After building this skill, if you see an opportunity to improve the skill tree
 itself (add new skills, refine specs, identify missing capabilities), you can
-write suggestions to agent_outputs/tree_proposals.txt using write_file.
+write suggestions to skills/tree_proposals.txt using write_file.
 Each proposal should have: skill name, file, tier, prereqs, description, spec.
 
 === RULES ===
 1. Read ALL source files you need to understand the full system
-2. Read existing agent_outputs/*.py to understand what's built
+2. Read existing skills/*.py to understand what's built
 3. Write COMPLETE working code in {skill.file}
 4. Include 'if __name__ == "__main__":' test block
 5. Tests MUST print 'ALL TESTS PASSED' when everything works
 6. Don't import agent.py in tests (loads MLX model, too slow)
-7. CAN import from memory.py, config.py, or other agent_outputs/*.py
+7. CAN import from memory.py, config.py, or other skills/*.py
 8. Fix errors until tests pass, then say DONE"""
 
 
 def load_proposals():
     """Load skill proposals written by the agent and merge into SKILLS."""
-    proposals_file = Path("./agent_outputs/tree_proposals.txt")
+    proposals_file = Path("skills/tree_proposals.txt")
     if not proposals_file.exists():
         return
 

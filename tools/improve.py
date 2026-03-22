@@ -4,7 +4,7 @@ Self-aware improvement loop.
 
 Each cycle the agent:
 1. Reads the ENTIRE codebase
-2. Reads what it has already built (agent_outputs/)
+2. Reads what it has already built (skills/)
 3. Reads its own history of successes and failures
 4. DECIDES what to improve next based on what would have the most impact
 5. Builds it, tests it, keeps it only if it passes
@@ -19,12 +19,12 @@ import json
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from agent import MLXAgent
-from logger import AgentLogger
-from skill_tree import get_next_skill, get_system_state, build_goal_for_skill, print_tree
+from src.agent import MLXAgent
+from src.logger import AgentLogger
+from src.skill_tree import get_next_skill, get_system_state, build_goal_for_skill, print_tree
 
 
-HISTORY_FILE = Path("./agent_outputs/.history.json")
+HISTORY_FILE = Path("./runs/history.json")
 
 
 def load_history() -> dict:
@@ -59,8 +59,8 @@ def scan_codebase() -> str:
         lines.append(f"  {f.name} ({size:,}B) - {classes} classes, {funcs} functions - {first_line}")
 
     # Agent outputs (what's already been built)
-    lines.append("\n=== ALREADY BUILT (agent_outputs/) ===")
-    output_dir = Path("./agent_outputs")
+    lines.append("\n=== ALREADY BUILT (skills/) ===")
+    output_dir = Path("./skills")
     if output_dir.exists():
         py_files = sorted(output_dir.glob("*.py"))
         if py_files:
@@ -112,7 +112,7 @@ def build_goal(cycle_num: int, codebase_map: str, history_summary: str) -> dict:
     # Figure out what's already passing so the agent doesn't rebuild it
     existing_passing = []
     existing_failing = []
-    output_dir = Path("./agent_outputs")
+    output_dir = Path("./skills")
     for f in sorted(output_dir.glob("*.py")):
         if f.name.startswith("."):
             continue
@@ -162,8 +162,8 @@ Say DONE when tests pass."""
 
 
 def discover_output_file():
-    """Find the most recently created/modified .py file in agent_outputs."""
-    output_dir = Path("./agent_outputs")
+    """Find the most recently created/modified .py file in skills."""
+    output_dir = Path("./skills")
     py_files = sorted(output_dir.glob("*.py"), key=lambda f: f.stat().st_mtime, reverse=True)
     for f in py_files:
         if f.name.startswith("."):
@@ -196,7 +196,7 @@ def validate_output(filepath: str) -> tuple[bool, str]:
     # Run tests
     try:
         env = os.environ.copy()
-        env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(Path("./agent_outputs").resolve())
+        env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(Path("./skills").resolve())
         result = subprocess.run(
             ["python3", str(path)],
             capture_output=True, text=True, timeout=30, env=env,
@@ -235,7 +235,7 @@ def run_cycle(cycle_num: int) -> bool:
     print_tree()
     print()
 
-    output_dir = Path("./agent_outputs")
+    output_dir = Path("./skills")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Run the agent with skill-tree goal

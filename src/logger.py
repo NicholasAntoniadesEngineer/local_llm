@@ -6,16 +6,16 @@ from pathlib import Path
 from datetime import datetime
 
 
-LOG_DIR = Path("./agent_outputs/logs")
+from src.paths import RUNS_DIR, get_run_dir
 
 
 class AgentLogger:
-    """Logs every event in a structured JSON-lines file per run."""
+    """Logs every event in a per-run directory."""
 
     def __init__(self, run_id: str = None):
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = LOG_DIR / f"run_{self.run_id}.jsonl"
+        self.run_dir = get_run_dir(self.run_id)
+        self.log_file = self.run_dir / "events.jsonl"
         self.start_time = time.time()
         self._event_num = 0
 

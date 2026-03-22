@@ -21,7 +21,24 @@ except ImportError:
     sys.exit(1)
 
 
-PERF_FILE = Path("./agent_outputs/.perf_stats.json")
+RUNS_DIR = Path("./runs")
+
+
+def find_latest_perf() -> Path:
+    """Find the most recent perf.json across all run directories."""
+    latest = None
+    latest_mtime = 0
+    for d in RUNS_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        pf = d / "perf.json"
+        if pf.exists() and pf.stat().st_mtime > latest_mtime:
+            latest = pf
+            latest_mtime = pf.stat().st_mtime
+    return latest
+
+
+PERF_FILE = find_latest_perf() or RUNS_DIR / "perf.json"
 
 
 def freshness(path: Path) -> str:
@@ -76,8 +93,9 @@ def get_memory() -> dict:
 
 def get_perf() -> dict:
     try:
-        if PERF_FILE.exists():
-            with open(PERF_FILE) as f:
+        pf = find_latest_perf()
+        if pf and pf.exists():
+            with open(pf) as f:
                 return json.load(f)
     except Exception:
         pass
@@ -100,7 +118,7 @@ def get_cycle_stats() -> dict:
 
 def get_history() -> dict:
     try:
-        hf = Path("./agent_outputs/.history.json")
+        hf = Path("./runs/history.json")
         if hf.exists():
             with open(hf) as f:
                 return json.load(f)
@@ -113,7 +131,7 @@ def get_model_info() -> dict:
     """Get model info from config + perf stats."""
     info = {}
     try:
-        from config import CONFIG
+        from src.config import CONFIG
         model_key = os.environ.get("AGENT_MODEL", "tool_calling")
         if model_key in CONFIG.models:
             m = CONFIG.models[model_key]
@@ -143,7 +161,7 @@ def get_model_info() -> dict:
 def get_latest_log_entry() -> dict:
     """Get the most recent structured log entry."""
     try:
-        log_dir = Path("./agent_outputs/logs")
+        log_dir = Path("./skills/logs")
         logs = sorted(log_dir.glob("run_*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not logs:
             return {}
@@ -324,10 +342,10 @@ def build_dashboard() -> Layout:
     tree_table.add_column("Size", width=8)
 
     try:
-        from skill_tree import SKILLS, get_system_state as _gs
+        from src.skill_tree import SKILLS, get_system_state as _gs
         _st = _gs()
         for sid, sk in sorted(SKILLS.items(), key=lambda x: (x[1].tier, -x[1].impact)):
-            fpath = Path(f"./agent_outputs/{sk.file}")
+            fpath = Path(f"./skills/{sk.file}")
             if sid in _st["passing"]:
                 st = "[green]DONE[/]"
                 sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
@@ -345,8 +363,13 @@ def build_dashboard() -> Layout:
     # ── Model Output (streaming) ──
     stream_text = ""
     try:
-        sf = Path("./agent_outputs/.stream.txt")
-        if sf.exists() and (time.time() - sf.stat().st_mtime) < 30:
+        # Find stream.txt in latest run dir
+        sf = None
+        for d in sorted(RUNS_DIR.iterdir(), key=lambda x: x.stat().st_mtime if x.is_dir() else 0, reverse=True):
+            if d.is_dir() and (d / "stream.txt").exists():
+                sf = d / "stream.txt"
+                break
+        if sf and sf.exists() and (time.time() - sf.stat().st_mtime) < 30:
             raw = sf.read_text()
             raw = raw.replace("\\n", "\n").replace('\\"', '"').replace("\\t", "  ")
             stream_text = raw[-3000:]

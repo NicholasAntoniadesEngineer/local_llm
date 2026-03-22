@@ -127,7 +127,7 @@ def create_directories():
     """Create required directories."""
     print("\n6. Creating directories...")
     dirs = [
-        Path("./agent_outputs"),
+        Path("./skills"),
         Path.home() / ".claude" / "sessions",
     ]
     for d in dirs:

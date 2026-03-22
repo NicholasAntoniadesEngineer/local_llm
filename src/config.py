@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from src.paths import SKILLS_DIR, RUNS_DIR
 
 
 @dataclass
@@ -47,7 +48,7 @@ CONFIG = AgentConfig(
         ),
     },
     max_iterations=25,  # more iterations = more KV cache = more RAM
-    output_dir=Path("./agent_outputs"),
+    output_dir=SKILLS_DIR,
     web_search_timeout=10,
     code_execution_timeout=30,
     max_search_results=5,

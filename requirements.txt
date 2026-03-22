@@ -1,0 +1,5 @@
+mlx>=0.30.5
+mlx-lm>=0.30.0
+httpx
+beautifulsoup4
+rich
