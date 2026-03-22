@@ -200,8 +200,29 @@ def get_live_agent_logs() -> str:
 
 
 def get_perf() -> dict:
-    """FIXED: Pull real token performance from the latest events.jsonl (no perf.json needed)."""
+    """Pull token performance from live perf.json first, events.jsonl as fallback."""
+    # If agent not running, return empty (monitor shows dashes)
+    proc = get_agent_process()
+    if not proc.get("running"):
+        return {"tokens_per_sec": "—", "peak_tok_s": "—", "context_fill_pct": "—", "gb_per_sec": "—"}
+
+    # Try live perf.json first (updated during generation)
     run_dir = get_current_run_dir()
+    if run_dir:
+        pf = run_dir / "perf.json"
+        if pf.exists():
+            try:
+                data = json.loads(pf.read_text())
+                return {
+                    "tokens_per_sec": data.get("decode_tok_s", data.get("gen_tok_s", "?")),
+                    "peak_tok_s": data.get("peak_tok_s", "?"),
+                    "context_fill_pct": data.get("context_pct", 0),
+                    "gb_per_sec": round(data.get("bandwidth_used_gbs", 0), 1),
+                }
+            except Exception:
+                pass
+
+    # Fallback to events.jsonl
     if not run_dir:
         return {}
 
@@ -210,11 +231,11 @@ def get_perf() -> dict:
         return {}
 
     try:
-        lines = log_file.read_text().strip().split("\n")[-20:]  # last 20 events
+        lines = log_file.read_text().strip().split("\n")[-20:]
         latest_tok_s = 0.0
         peak_tok_s = 0.0
         context_fill = 0
-        context_window = 16384  # fallback
+        context_window = 32768  # read from perf.json if available
 
         for line in reversed(lines):  # newest first
             try:
