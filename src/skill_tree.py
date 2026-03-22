@@ -570,16 +570,22 @@ Output ONLY the Python code. No explanation."""
 
         return f"""BUILD: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')}, Impact: {skill.get('current_impact', skill.get('impact','?'))}/10)
 FILE: {skill['file']}
-WHY: {skill.get('description','')}
 SPEC: {skill.get('spec','')}
 TESTS: {skill.get('test_hint','')}
 
-PREREQ CODE (you can import from these):
+AVAILABLE PREREQS (API signatures):
 {prereq_code}
 
 {code_list}
 
-RULES: Write complete code in {skill['file']}. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing."""
+IMPORT RULES:
+- Import prereqs with: from <module_name> import <ClassName> (e.g. from confidence_scorer import ConfidenceScorer)
+- Do NOT import from src.memory or src.config — those are internal agent modules
+- If you need to understand a prereq fully, use read_file to read it
+- Keep your code STANDALONE — only use stdlib + the prereq imports above
+- If a prereq import fails, catch it and provide a fallback
+
+RULES: Write complete code in {skill['file']}. Include 'if __name__ == "__main__":' test block. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing."""
 
     def _codebase(self, budget=1500):
         """Minimal codebase context - only prereq files get full content."""
@@ -593,12 +599,23 @@ RULES: Write complete code in {skill['file']}. Tests print 'ALL TESTS PASSED'. D
         return "\n".join(lines)
 
     def _prereq_code(self, skill):
-        """Only load the actual prerequisite files the skill needs to import."""
+        """Extract only class/function signatures from prereq files (saves tokens)."""
         parts = []
         for pid in self.graph.predecessors(skill["id"]):
-            f = SKILLS_DIR / self._field(pid, "file")
-            if f.exists():
-                parts.append(f"--- {f.name} ---\n{f.read_text()}")
+            fname = self._field(pid, "file")
+            f = SKILLS_DIR / fname
+            if not f.exists():
+                continue
+            # Extract class names and method signatures only
+            lines = []
+            for line in f.read_text().splitlines():
+                stripped = line.strip()
+                if stripped.startswith(("class ", "def ", "    def ")):
+                    lines.append(line)
+                elif stripped.startswith(("from ", "import ")):
+                    lines.append(line)
+            stem = Path(fname).stem
+            parts.append(f"# {stem} — import with: from {stem} import *\n" + "\n".join(lines))
         return "\n".join(parts) if parts else "(no prereqs)"
 
     def _tree_text(self):
