@@ -1,61 +1,157 @@
 #!/usr/bin/env python3
 """
-MLX-powered autonomous agent for Apple Silicon (optimized for M-series chips).
-Uses configuration-driven design with no hardcoded magic numbers.
+MLX-powered autonomous agent for Apple Silicon.
 
-Performance: ~60 tok/s on M4 Max with Qwen3-8B-4bit (MLX is 2-3x faster than Ollama).
+Uses Qwen3's NATIVE Hermes tool-calling format (<tool_call>) and
+tokenizer.apply_chat_template() for reliable tool extraction.
+
+Performance: ~60 tok/s on M4 Max with Qwen3-14B-4bit.
 """
 
 import json
 import subprocess
-import sys
-import urllib.request
-import urllib.parse
 import re
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
 from config import CONFIG
-from config_manager import ConfigManager
 from memory import MemoryManager
-from reflection import ReflectionEngine
+from logger import AgentLogger
+
+
+# Tool definitions in OpenAI-compatible format (what Qwen3 was trained on)
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web for information on any topic",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python",
+            "description": "Execute Python code and return output",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Python code to execute"}
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read contents of a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to read"}
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "Write content to a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to write"},
+                    "content": {"type": "string", "description": "Content to write"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Execute a shell command",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cmd": {"type": "string", "description": "Shell command to run"}
+                },
+                "required": ["cmd"],
+            },
+        },
+    },
+]
+
+# Regex for Qwen3's native Hermes tool call format
+TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+# Fallback regex for the old format (in case model uses it)
+TOOL_CALL_FALLBACK_RE = re.compile(r"<tool>(\w+)</tool>\s*<args>(\{.*?\})</args>", re.DOTALL)
 
 
 class MLXAgent:
-    """MLX-powered agent with configuration-driven design."""
+    """MLX-powered agent using Qwen3's native tool-calling format."""
 
-    def __init__(self, config_model_name: str = "fast", goal: str = "") -> None:
-        """Initialize agent with config-specified model.
-
-        Args:
-            config_model_name: Key in CONFIG.models (fast/balanced/quality)
-            goal: Task goal (used for memory tracking)
-
-        Raises:
-            KeyError: If model_name not in config
-            ImportError: If mlx_lm not installed
-        """
+    def __init__(self, config_model_name: str = "balanced", goal: str = "") -> None:
         if config_model_name not in CONFIG.models:
             raise KeyError(f"Model '{config_model_name}' not in CONFIG.models")
 
         self.config_model = CONFIG.models[config_model_name]
-        self.conversation: list[dict[str, str]] = []
-        self.config_manager = ConfigManager()  # For self-improvement
-        self.memory_manager = MemoryManager(goal) if goal else None  # Session memory
+        self.memory_manager = MemoryManager(goal) if goal else None
+        self.logger = AgentLogger()
+        self._search_cache: dict[str, str] = {}
+        self._search_quality: float = 0.5
 
-        # Setup output directory
+        # Performance tracking
+        self._perf: dict = {
+            "total_tokens": 0,
+            "total_gen_time": 0.0,
+            "step_times": [],
+            "tool_success": {"total": 0, "success": 0},
+        }
+
         CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Lazy load MLX
+        # Load MLX model + tokenizer with optimizations
         try:
-            from mlx_lm import load, generate
+            from mlx_lm import load, generate, stream_generate
+            from mlx_lm.sample_utils import make_sampler
 
-            self.mlx_generate = generate
+            self._generate_fn = generate
+            self._stream_generate = stream_generate
             self.model, self.tokenizer = load(self.config_model.name)
+
+            # OPTIMIZATION: greedy sampler (fastest - single argmax, no sampling)
+            self._sampler = make_sampler(temp=0.0)
+
+            # OPTIMIZATION: prompt cache for KV reuse across turns
+            try:
+                from mlx_lm.models.cache import make_prompt_cache
+                self._prompt_cache = make_prompt_cache(self.model)
+            except Exception:
+                self._prompt_cache = None
+
+            self._draft_model = None
+
             print(f"✅ Loaded {self.config_model.name} via MLX")
             print(f"📁 Output folder: {CONFIG.output_dir.resolve()}")
             print(f"📊 Context: {self.config_model.context_window} tokens")
+            if self._prompt_cache:
+                print(f"⚡ KV cache enabled")
         except ImportError:
             print("❌ MLX not installed. Run: pip install mlx-lm")
             sys.exit(1)
@@ -63,888 +159,579 @@ class MLXAgent:
             print(f"❌ Failed to load model: {e}")
             sys.exit(1)
 
-    def chat(self, prompt: str, system: Optional[str] = None) -> str:
-        """Chat with MLX model using configured max_tokens.
+    def _format_prompt(self, messages: list[dict], include_tools: bool = True) -> str:
+        """Format messages using tokenizer's native chat template.
 
-        Args:
-            prompt: User message
-            system: Optional system prompt (inserted if not already present)
-
-        Returns:
-            Model response text
+        This is the KEY improvement - Qwen3 was trained with apply_chat_template,
+        not manual role:content formatting.
         """
-        if system and not any(msg.get("role") == "system" for msg in self.conversation):
-            self.conversation.insert(0, {"role": "system", "content": system})
+        try:
+            tools_arg = TOOLS if include_tools else None
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tools=tools_arg,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except Exception:
+            # Fallback if template doesn't support tools parameter
+            return self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
 
-        self.conversation.append({"role": "user", "content": prompt})
+    def _generate_response(self, messages: list[dict]) -> str:
+        """Generate a response with all MLX optimizations + performance tracking."""
+        import time as _time
+        prompt = self._format_prompt(messages)
 
-        # Format messages for MLX (keep recent context within budget)
-        messages_text = ""
-        max_history_turns = 5  # Keep last N conversation turns
-        for msg in self.conversation[-max_history_turns:]:
-            role = msg["role"]
-            content = msg["content"]
-            messages_text += f"{role}: {content}\n"
+        # Count prompt tokens
+        prompt_tokens = len(self.tokenizer.encode(prompt)) if hasattr(self.tokenizer, 'encode') else len(prompt) // 4
 
         try:
-            response = self.mlx_generate(
-                self.model,
-                self.tokenizer,
-                prompt=messages_text,
-                max_tokens=self.config_model.max_tokens,
+            t0 = _time.perf_counter()
+
+            # Build kwargs with all optimizations
+            kwargs = {
+                "prompt": prompt,
+                "max_tokens": self.config_model.max_tokens,
+                "sampler": self._sampler,  # greedy = fastest
+            }
+            if self._prompt_cache:
+                kwargs["prompt_cache"] = self._prompt_cache
+            if self._draft_model:
+                kwargs["draft_model"] = self._draft_model
+
+            # Stream tokens to file for real-time monitoring
+            stream_file = CONFIG.output_dir / ".stream.txt"
+            response_parts = []
+            token_count = 0
+
+            try:
+                for chunk in self._stream_generate(self.model, self.tokenizer, **kwargs):
+                    token_count += 1
+                    response_parts.append(chunk.text)
+                    # Write partial output every 5 tokens
+                    if token_count % 5 == 0:
+                        try:
+                            with open(stream_file, "w") as sf:
+                                sf.write("".join(response_parts))
+                        except Exception:
+                            pass
+                response = "".join(response_parts)
+                # Final write + append to full history
+                try:
+                    with open(stream_file, "w") as sf:
+                        sf.write(response)
+                    with open(CONFIG.output_dir / ".stream_history.txt", "a") as hf:
+                        hf.write(f"\n--- Step {len(self._perf['step_times'])+1} ---\n")
+                        hf.write(response)
+                        hf.write("\n")
+                except Exception:
+                    pass
+            except Exception:
+                # Fallback to non-streaming
+                response = self._generate_fn(self.model, self.tokenizer, **kwargs)
+
+            elapsed = _time.perf_counter() - t0
+
+            # Token counting
+            gen_tokens = len(self.tokenizer.encode(response)) if hasattr(self.tokenizer, 'encode') else max(1, len(response) // 4)
+            gen_tok_s = gen_tokens / max(0.01, elapsed)
+            prompt_tok_s = prompt_tokens / max(0.01, elapsed)
+
+            self._perf["total_tokens"] += gen_tokens
+            self._perf["total_gen_time"] += elapsed
+            self._perf["step_times"].append(elapsed)
+            self._perf["prompt_tokens"] = self._perf.get("prompt_tokens", 0) + prompt_tokens
+
+            avg_tok_s = self._perf["total_tokens"] / max(0.01, self._perf["total_gen_time"])
+
+            # Write stats to file for monitor to read
+            total_steps = len(self._perf["step_times"])
+            tool_total = self._perf["tool_success"]["total"]
+            tool_ok = self._perf["tool_success"]["success"]
+            context_used = prompt_tokens + gen_tokens
+            context_pct = (context_used / self.config_model.context_window) * 100
+
+            stats = {
+                "gen_tok_s": round(gen_tok_s, 1),
+                "avg_tok_s": round(avg_tok_s, 1),
+                "peak_tok_s": round(max(
+                    self._perf.get("peak_tok_s", 0), gen_tok_s
+                ), 1),
+                "prompt_tokens": prompt_tokens,
+                "gen_tokens": gen_tokens,
+                "total_gen_tokens": self._perf["total_tokens"],
+                "total_prompt_tokens": self._perf.get("prompt_tokens", 0),
+                "total_all_tokens": self._perf["total_tokens"] + self._perf.get("prompt_tokens", 0),
+                "elapsed": round(elapsed, 2),
+                "total_time": round(self._perf["total_gen_time"], 1),
+                "step": total_steps,
+                "context_used": context_used,
+                "context_window": self.config_model.context_window,
+                "context_pct": round(context_pct, 1),
+                "model": self.config_model.name.split("/")[-1],
+                "max_tokens": self.config_model.max_tokens,
+                "tool_calls": tool_total,
+                "tool_success": tool_ok,
+                "tool_success_rate": round(tool_ok / max(1, tool_total) * 100, 0),
+                "avg_step_time": round(sum(self._perf["step_times"]) / max(1, total_steps), 1),
+                "messages_in_context": len(messages) if 'messages' in dir() else 0,
+                # Bandwidth = model_size_bytes × tokens_generated / time
+                # 14B at 4-bit ≈ 8GB weights read per token generated
+                "bandwidth_used_gbs": round(8.0 * gen_tok_s, 1),
+            }
+            self._perf["peak_tok_s"] = stats["peak_tok_s"]
+            try:
+                with open(CONFIG.output_dir / ".perf_stats.json", "w") as f:
+                    json.dump(stats, f)
+            except Exception:
+                pass
+
+            print(f"  ⚡ {gen_tok_s:.0f} gen tok/s | {prompt_tokens} prompt + {gen_tokens} gen tokens | {elapsed:.1f}s")
+            self.logger.generation(
+                step=len(self._perf["step_times"]),
+                prompt_tokens=prompt_tokens, gen_tokens=gen_tokens,
+                tok_s=gen_tok_s, elapsed=elapsed,
+                response_preview=response[:200],
             )
-            self.conversation.append({"role": "assistant", "content": response})
+
+            # Strip thinking blocks
+            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
             return response
         except Exception as e:
-            return f"ERROR: {str(e)}"
+            return f"ERROR: {e}"
 
-    def execute_tool(self, tool_name: str, args: dict) -> str:
-        """Execute a tool with flexible argument handling.
+    def _extract_tool_calls(self, response: str) -> list[dict]:
+        """Extract tool calls from model output.
 
-        Args:
-            tool_name: Tool to execute (web_search, run_python, etc.)
-            args: Tool arguments (flexible naming)
-
-        Returns:
-            Tool execution result
+        Supports:
+        1. Qwen3 native: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        2. Fallback: <tool>name</tool><args>{...}</args>
+        3. Last resort: regex patterns from narrative
         """
+        calls = []
+
+        # 1. Native Hermes format (what Qwen3 was trained on)
+        for match in TOOL_CALL_RE.finditer(response):
+            try:
+                call = json.loads(match.group(1))
+                name = call.get("name", "")
+                args = call.get("arguments", {})
+                if isinstance(args, str):
+                    args = json.loads(args)
+                if name:
+                    calls.append({"name": name, "arguments": args})
+            except json.JSONDecodeError:
+                continue
+
+        if calls:
+            return calls
+
+        # 2. Old format fallback
+        for match in TOOL_CALL_FALLBACK_RE.finditer(response):
+            name = match.group(1)
+            try:
+                args = json.loads(match.group(2))
+                calls.append({"name": name, "arguments": args})
+            except json.JSONDecodeError:
+                continue
+
+        if calls:
+            return calls
+
+        # 3. Extract from narrative (model wrote prose instead of tool call)
+        # Check for python code FIRST (most common case for self-improvement)
+        if "```python" in response:
+            code_match = re.search(r"```python\s*(.*?)```", response, re.DOTALL)
+            if code_match:
+                calls.append({"name": "run_python", "arguments": {"code": code_match.group(1).strip()}})
+        elif "write_file" in response.lower() or "save" in response.lower():
+            code_match = re.search(r"```(?:python)?\s*(.*?)```", response, re.DOTALL)
+            if code_match:
+                calls.append({
+                    "name": "write_file",
+                    "arguments": {"path": "solution.py", "content": code_match.group(1).strip()},
+                })
+
+        return calls
+
+    # ── Tool implementations ──────────────────────────────────────────────
+
+    def execute_tool(self, name: str, args: dict) -> str:
+        """Route and execute a tool call."""
+        dispatch = {
+            "web_search": lambda a: self._web_search(a.get("query", "")),
+            "run_python": lambda a: self._run_python(a.get("code", "")),
+            "bash": lambda a: self._bash(a.get("cmd", "")),
+            "read_file": lambda a: self._read_file(a.get("path", "")),
+            "write_file": lambda a: self._write_file(
+                a.get("path") or a.get("file_path") or a.get("file_name", ""),
+                a.get("content", ""),
+            ),
+        }
+        handler = dispatch.get(name)
+        if not handler:
+            return f"Unknown tool: {name}"
         try:
-            if tool_name == "web_search":
-                return self._web_search(args.get("query", ""))
-            elif tool_name == "run_python":
-                return self._run_python(args.get("code", ""))
-            elif tool_name == "bash":
-                return self._bash(args.get("cmd", ""))
-            elif tool_name == "read_file":
-                return self._read_file(args.get("path", ""))
-            elif tool_name == "write_file":
-                # Handle flexible argument names (path, file_path, file_name, etc.)
-                path = args.get("path") or args.get("file_path") or args.get("file_name", "")
-                content = args.get("content", "")
-                return self._write_file(path, content)
-            elif tool_name == "spawn_subagent":
-                return self._spawn_subagent(
-                    args.get("goal", ""),
-                    args.get("config_version", "v0"),
-                )
-            elif tool_name == "write_config":
-                return self._write_config(
-                    args.get("description", ""),
-                    args.get("changes", {}),
-                )
-            elif tool_name == "evaluate_version":
-                return self._evaluate_version(
-                    args.get("version_id", ""),
-                    args.get("score", 0.0),
-                    args.get("results", {}),
-                )
-            else:
-                return f"Unknown tool: {tool_name}"
+            return handler(args)
         except Exception as e:
-            return f"ERROR in {tool_name}: {str(e)}"
+            return f"ERROR in {name}: {e}"
 
     def _web_search(self, query: str) -> str:
-        """Search using DuckDuckGo with SMART result filtering & relevance scoring.
+        """Search via DuckDuckGo with caching and relevance scoring."""
+        if not query:
+            return "ERROR: empty query"
 
-        IMPROVED: Filters junk results, rates relevance, suggests better queries if needed.
-        TRACKS QUALITY: Returns average relevance score for phase-decision logic.
+        # Check cache
+        if query in self._search_cache:
+            return f"[CACHED] {self._search_cache[query]}"
 
-        Args:
-            query: Search query string
-
-        Returns:
-            Formatted search results with relevance scores + quality metrics
-        """
         try:
             import httpx
             from bs4 import BeautifulSoup
-            import urllib.parse as urlparse
+            import urllib.parse
 
             url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
             with httpx.Client(timeout=CONFIG.web_search_timeout) as client:
-                response = client.get(url, headers=headers, follow_redirects=True)
-                if response.status_code != 200:
-                    return f"Search failed (HTTP {response.status_code})"
+                resp = client.get(url, headers=headers, follow_redirects=True)
+                if resp.status_code != 200:
+                    return f"Search failed (HTTP {resp.status_code})"
 
-                soup = BeautifulSoup(response.text, "html.parser")
+                soup = BeautifulSoup(resp.text, "html.parser")
                 results = []
-                relevance_scores = []
-                junk_count = 0
 
-                # Find all result blocks
-                for result in soup.find_all("div", class_="result"):
-                    links = result.find_all("a")
-                    if not links:
+                for block in soup.find_all("div", class_="result"):
+                    link = block.find("a", href=True)
+                    if not link:
                         continue
 
-                    title = ""
-                    href = ""
+                    href = link.get("href", "")
+                    title = link.get_text(strip=True)
 
-                    for link in links:
-                        link_href = link.get("href", "").strip()
-                        link_text = link.get_text(strip=True)
+                    # Resolve DuckDuckGo redirect URLs
+                    if "uddg=" in href:
+                        try:
+                            href = urllib.parse.parse_qs(
+                                urllib.parse.urlparse(href).query
+                            ).get("uddg", [href])[0]
+                        except Exception:
+                            pass
 
-                        if not link_text or not link_href:
-                            continue
-
-                        if "uddg=" in link_href:
-                            try:
-                                actual_url = urlparse.parse_qs(urlparse.urlparse(link_href).query).get("uddg", [""])[0]
-                                link_href = actual_url
-                            except:
-                                pass
-
-                        if link_href.startswith("http"):
-                            if not href:
-                                href = link_href
-                            if not title and len(link_text) > 3:
-                                title = link_text
-                                break
-
-                    # SMART FILTERING: Check relevance
-                    if not href or not title:
+                    if not href.startswith("http") or not title or len(title) < 4:
                         continue
-
-                    # Score relevance to query
-                    relevance_score = self._score_relevance(title, href, query)
-
-                    # FILTER: Skip low-relevance junk
-                    if relevance_score < 0.3:
-                        junk_count += 1
-                        continue
-
-                    relevance_scores.append(relevance_score)
 
                     # Extract snippet
-                    snippet = ""
-                    snippet_elem = result.find("div", class_="result__snippet")
-                    if snippet_elem:
-                        snippet = snippet_elem.get_text(strip=True)[:150]
+                    snippet_el = block.find("div", class_="result__snippet")
+                    snippet = snippet_el.get_text(strip=True)[:150] if snippet_el else ""
 
-                    if len(results) < CONFIG.max_search_results:
-                        # Try content extraction for top 2
-                        content = ""
-                        if len(results) < 2:
-                            content = self._fetch_page_summary(href)
+                    results.append(f"- {title}\n  {href}\n  {snippet}")
 
-                        # Format with relevance indicator
-                        relevance_bar = "█" * int(relevance_score * 5) + "░" * (5 - int(relevance_score * 5))
+                    if len(results) >= CONFIG.max_search_results:
+                        break
 
-                        if content:
-                            results.append(f"• **{title}** [{relevance_bar}]\n  {href}\n  SUMMARY: {content[:200]}")
-                        elif snippet:
-                            results.append(f"• **{title}** [{relevance_bar}]\n  {href}\n  SNIPPET: {snippet}")
-                        else:
-                            results.append(f"• **{title}** [{relevance_bar}]\n  {href}")
+                if not results:
+                    return f"No results for '{query}'"
 
-                if results:
-                    output = "Search Results:\n\n" + "\n".join(results)
+                output = f"Results for '{query}':\n\n" + "\n\n".join(results)
 
-                    # QUALITY METRICS: Calculate average relevance
-                    avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
-                    quality_indicator = "🔴 LOW" if avg_relevance < 0.4 else "🟡 MEDIUM" if avg_relevance < 0.6 else "🟢 HIGH"
-                    output += f"\n\n📊 Result Quality: {quality_indicator} (avg: {avg_relevance:.2f})"
-
-                    # INTELLIGENT: If too many junk results, suggest better query
-                    if junk_count > len(results):
-                        output += f"\n⚠️  Found many irrelevant results ({junk_count} filtered)."
-                        output += f"\nSuggest: '{self._suggest_refined_query(query)}'"
-
-                    # STORE QUALITY METRIC for agent decision-making
-                    if not hasattr(self, '_last_search_quality'):
-                        self._last_search_quality = {}
-                    self._last_search_quality['average_relevance'] = avg_relevance
-                    self._last_search_quality['quality_level'] = quality_indicator
-
-                    return output
-                else:
-                    # HELPFUL: If no good results, suggest refined query
-                    suggestion = self._suggest_refined_query(query)
-                    output = f"No relevant results for '{query}'.\n🔴 LOW quality search - Try: '{suggestion}'"
-
-                    # Track low quality
-                    if not hasattr(self, '_last_search_quality'):
-                        self._last_search_quality = {}
-                    self._last_search_quality['average_relevance'] = 0.0
-                    self._last_search_quality['quality_level'] = "🔴 LOW"
-
-                    return output
+                # Cache it
+                self._search_cache[query] = output
+                return output
 
         except ImportError:
-            return "httpx/beautifulsoup4 not installed"
+            return "ERROR: pip install httpx beautifulsoup4"
         except Exception as e:
-            return f"Search error: {str(e)}"
-
-    def _score_relevance(self, title: str, url: str, query: str) -> float:
-        """Score how relevant a result is to the query (0-1 scale).
-
-        FILTERS OUT JUNK: Generic pages, unrelated content, etc.
-        """
-        score = 0.5  # Base score
-
-        query_words = set(query.lower().split())
-        title_lower = title.lower()
-        url_lower = url.lower()
-
-        # Boost: Keywords in title
-        keyword_matches = sum(1 for word in query_words if word in title_lower)
-        score += (keyword_matches / max(1, len(query_words))) * 0.3
-
-        # Boost: Keywords in domain
-        if any(word in url_lower for word in query_words):
-            score += 0.2
-
-        # PENALIZE: Junk domains
-        junk_domains = ["google.com", "github.com/search", "pinterest.com", "facebook.com", "youtube.com/watch", "twitter.com"]
-        if any(junk in url_lower for junk in junk_domains):
-            score *= 0.5
-
-        # PENALIZE: Generic pages (no specific content signal)
-        if "search?q=" in url or "results?q=" in url:
-            score *= 0.3
-
-        # BOOST: Official docs / tutorials / guides
-        good_signals = ["docs", "documentation", "tutorial", "guide", "api", "github.com", "official"]
-        if any(signal in title_lower or signal in url_lower for signal in good_signals):
-            score = min(1.0, score + 0.3)
-
-        return min(1.0, max(0.0, score))
-
-    def _suggest_refined_query(self, original_query: str) -> str:
-        """Suggest a better search query if current one isn't working.
-
-        SMART: Different angles on the same topic.
-        Rotates through strategies: tutorial → docs → github → code → api → guide
-        """
-        words = original_query.lower().split()
-
-        strategies = [
-            f"'{original_query}' tutorial",
-            f"'{original_query}' documentation",
-            f"'{original_query}' github",
-            f"'{original_query}' example code",
-            f"'{' '.join(words[:-1])} api" if len(words) > 1 else f"'{original_query}' api",
-            f"'{words[0]}' {words[-1]} guide" if len(words) > 1 else f"'{original_query}' guide",
-        ]
-
-        # Track which strategy to use next (round-robin)
-        if not hasattr(self, '_refined_query_index'):
-            self._refined_query_index = 0
-        else:
-            self._refined_query_index = (self._refined_query_index + 1) % len(strategies)
-
-        return strategies[self._refined_query_index]
-
-    def _fetch_page_summary(self, url: str) -> str:
-        """Fetch and summarize a page (quick extraction).
-
-        Args:
-            url: Page URL to fetch
-
-        Returns:
-            First 200 chars of page content or empty string on failure
-        """
-        try:
-            import httpx
-            from bs4 import BeautifulSoup
-
-            with httpx.Client(timeout=5) as client:
-                response = client.get(url, headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True)
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    # Remove scripts and styles
-                    for script in soup(["script", "style"]):
-                        script.decompose()
-                    # Get text
-                    text = soup.get_text()
-                    # Clean up whitespace
-                    text = " ".join(text.split())
-                    return text[:200] if text else ""
-        except Exception:
-            pass
-        return ""
+            return f"Search error: {e}"
 
     def _run_python(self, code: str) -> str:
-        """Execute Python code with configured timeout.
-
-        Args:
-            code: Python code to execute
-
-        Returns:
-            stdout or stderr output
-        """
+        """Execute Python code with timeout."""
+        if not code or code.strip() == "":
+            return "ERROR: empty code"
         try:
+            # Run from agent_outputs so imports work for generated files
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(CONFIG.output_dir.resolve()) + ":" + env.get("PYTHONPATH", "")
             result = subprocess.run(
                 ["python3", "-c", code],
                 capture_output=True,
                 text=True,
                 timeout=CONFIG.code_execution_timeout,
+                env=env,
             )
-            return result.stdout if result.stdout else result.stderr
+            output = result.stdout + result.stderr
+            return output if output.strip() else "(no output)"
         except subprocess.TimeoutExpired:
-            return f"ERROR: Code execution timed out after {CONFIG.code_execution_timeout}s"
+            return f"ERROR: timed out after {CONFIG.code_execution_timeout}s"
         except Exception as e:
-            return f"ERROR: {str(e)}"
+            return f"ERROR: {e}"
 
     def _bash(self, cmd: str) -> str:
-        """Execute bash command with configured timeout.
-
-        Args:
-            cmd: Shell command to execute
-
-        Returns:
-            stdout or stderr output
-        """
+        """Execute shell command with timeout."""
+        if not cmd:
+            return "ERROR: empty command"
         try:
             result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
+                cmd, shell=True, capture_output=True, text=True,
                 timeout=CONFIG.code_execution_timeout,
             )
-            return result.stdout if result.stdout else result.stderr
+            output = result.stdout + result.stderr
+            return output if output.strip() else "(no output)"
         except subprocess.TimeoutExpired:
-            return f"ERROR: Command timed out after {CONFIG.code_execution_timeout}s"
+            return f"ERROR: timed out after {CONFIG.code_execution_timeout}s"
         except Exception as e:
-            return f"ERROR: {str(e)}"
+            return f"ERROR: {e}"
 
     def _read_file(self, path: str) -> str:
-        """Read file contents.
-
-        Args:
-            path: File path (absolute or relative to current directory)
-
-        Returns:
-            File contents or error message
-        """
+        """Read file contents."""
         try:
-            with open(path, "r") as f:
+            with open(path) as f:
                 return f.read()
         except FileNotFoundError:
-            return f"ERROR: File not found: {path}"
+            return f"ERROR: file not found: {path}"
         except Exception as e:
-            return f"ERROR: {str(e)}"
+            return f"ERROR: {e}"
 
     def _write_file(self, path: str, content: str) -> str:
-        """Write file using configured output directory.
+        """Write file to output directory."""
+        if not path:
+            return "ERROR: path required"
+        if not content:
+            return "ERROR: content is empty"
 
-        Args:
-            path: Filename (must include .txt, .py, etc.)
-            content: Content to write
+        # Resolve path
+        if os.path.isabs(path):
+            full_path = Path(path)
+        elif "agent_outputs" in path:
+            full_path = Path(path)
+        else:
+            full_path = CONFIG.output_dir / path
 
-        Returns:
-            Success message or error with details
-        """
-        try:
-            # Validate inputs
-            if not path:
-                return "ERROR: path is required (e.g., 'code.py')"
+        full_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if not content:
-                return "ERROR: content is empty - nothing to write"
+        with open(full_path, "w") as f:
+            n = f.write(content)
 
-            # Reject directory paths (must be actual filename)
-            if path.endswith('/'):
-                return "ERROR: path must be filename (e.g., 'code.py'), not a directory"
+        return f"Wrote {n} bytes to {full_path}"
 
-            # Determine full path
-            if os.path.isabs(path):
-                full_path = Path(path)
-            elif "agent_outputs" in path:
-                full_path = Path(path)
-            else:
-                full_path = CONFIG.output_dir / path
-
-            # Ensure directory exists
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write file
-            with open(full_path, "w") as f:
-                bytes_written = f.write(content)
-
-            if bytes_written == 0:
-                return f"WARNING: Wrote 0 bytes to {full_path} (content was empty?)"
-
-            return f"✓ Successfully wrote {bytes_written} bytes to {full_path}"
-        except Exception as e:
-            return f"ERROR writing '{path}': {str(e)}"
-
-    def _spawn_subagent(self, goal: str, config_version: str = "v0") -> str:
-        """Spawn a sub-agent with specific config version.
-
-        Args:
-            goal: Task for the sub-agent
-            config_version: Config version to use (e.g., "v0", "v1")
-
-        Returns:
-            Sub-agent execution result
-        """
-        try:
-            # Create temp directory for subagent output
-            subagent_dir = CONFIG.output_dir / f"subagent_{config_version}"
-            subagent_dir.mkdir(parents=True, exist_ok=True)
-
-            # Run subagent with config version
-            cmd = [
-                "python3",
-                "agent.py",
-                f"--config-version={config_version}",
-                goal,
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=CONFIG.code_execution_timeout * 2,
-                cwd=str(Path.cwd()),
-            )
-
-            output = result.stdout if result.stdout else result.stderr
-            return f"Subagent({config_version}) completed:\n{output[:500]}"
-        except subprocess.TimeoutExpired:
-            return f"Subagent timeout after {CONFIG.code_execution_timeout * 2}s"
-        except Exception as e:
-            return f"ERROR spawning subagent: {str(e)}"
-
-    def _write_config(self, description: str, changes: dict) -> str:
-        """Write a new config version with specified changes.
-
-        Args:
-            description: What changed (e.g., "Increased max_tokens from 512 to 1024")
-            changes: Dict of config changes (e.g., {"max_tokens": 1024})
-
-        Returns:
-            New config version ID and validation result
-        """
-        try:
-            version_id = self.config_manager.create_version(
-                description=description,
-                config_changes=changes,
-                parent_version="v0",
-            )
-
-            version = self.config_manager.versions[version_id]
-            return (
-                f"Created {version_id}: {description}\n"
-                f"Config file: {version.config_file}\n"
-                f"Ready for A/B testing"
-            )
-        except Exception as e:
-            return f"ERROR creating config version: {str(e)}"
-
-    def _evaluate_version(
-        self, version_id: str, score: float, results: dict
-    ) -> str:
-        """Record performance metrics for a config version.
-
-        Args:
-            version_id: Version to evaluate (e.g., "v1")
-            score: Performance score (0-1, higher is better)
-            results: Detailed test results dict
-
-        Returns:
-            Evaluation summary
-        """
-        try:
-            self.config_manager.evaluate_version(version_id, score, results)
-
-            best = self.config_manager.get_best_version()
-            return (
-                f"Recorded metrics for {version_id}: score={score:.2f}\n"
-                f"Best version so far: {best}\n"
-                f"Results: {results}"
-            )
-        except Exception as e:
-            return f"ERROR evaluating version: {str(e)}"
+    # ── Memory context ────────────────────────────────────────────────────
 
     def _build_memory_context(self) -> str:
-        """Build concise memory context for the model (prevents context loss).
-
-        Returns:
-            Formatted memory summary showing what's been done and discovered
-        """
+        """Build concise memory summary for the model."""
         if not self.memory_manager:
-            return "MEMORY: (empty)"
+            return ""
 
         mem = self.memory_manager.memory
-        context = f"\n=== MEMORY CONTEXT ===\n"
-        context += f"Total iterations: {len(mem.iterations)}\n"
+        lines = [f"[Memory: {len(mem.iterations)} steps completed]"]
 
-        # Recent tools and results
-        if mem.iterations:
-            context += f"\nRecent actions:\n"
-            for it in mem.iterations[-4:]:  # Last 4 iterations
-                tool = it.tool_used
-                success = "✓" if it.success else "✗"
-                result_preview = it.result[:60].replace("\n", " ") if it.result else "(no result)"
-                context += f"  {success} Step {it.step}: {tool} → {result_preview}\n"
+        for it in mem.iterations[-4:]:
+            status = "OK" if it.success else "FAIL"
+            preview = it.result[:60].replace("\n", " ") if it.result else ""
+            lines.append(f"  {status} {it.tool_used}: {preview}")
 
-        # Discoveries
         if mem.discoveries:
-            context += f"\nKey discoveries:\n"
-            for discovery in mem.discoveries[-3:]:  # Last 3 discoveries
-                context += f"  • {discovery[:80]}\n"
+            lines.append(f"  Discoveries: {len(mem.discoveries)}")
 
-        # Current phase/failures
-        if mem.failures:
-            context += f"\nRecent issues ({len(mem.failures)} total):\n"
-            for failure in mem.failures[-2:]:  # Last 2 failures
-                context += f"  ✗ {failure[:70]}\n"
+        return "\n".join(lines)
 
-        context += "=== END MEMORY ===\n"
-        return context
+    # ── Main ReAct loop ───────────────────────────────────────────────────
 
     def run_loop(self, goal: str) -> None:
-        """Execute intelligent ReAct loop with aggressive phase tracking & FULL CONTEXT.
-
-        Args:
-            goal: Task objective for the agent
-
-        Features:
-        - MAINTAINS FULL CONTEXT in system prompt (critical!)
-        - Working memory of ALL iterations and discoveries
-        - Reflects on progress and adjusts strategy
-        - Never asks user for input (auto-continues)
-        - Tracks learning and discoveries
-        - AGGRESSIVE phase tracking: Research → Code → Test → Save
-        - Self-improves through config evolution
-        """
-        # Initialize memory for this session
+        """Execute ReAct loop with native Qwen3 tool calling."""
         if not self.memory_manager:
             self.memory_manager = MemoryManager(goal)
 
-        print(f"\n🚀 MLX Agent starting (AGGRESSIVE MODE):\n  Goal: {goal}\n")
+        print(f"\n🚀 Agent starting:\n  Goal: {goal}\n")
+        self.logger.run_start(goal, self.config_model.name, {
+            "max_tokens": self.config_model.max_tokens,
+            "context_window": self.config_model.context_window,
+            "max_iterations": CONFIG.max_iterations,
+        })
 
-        # Use initial response to start
-        initial_system = f"""GOAL: {goal}
+        system_msg = (
+            f"/nothink\n"
+            f"You are an autonomous agent. Your goal: {goal}\n\n"
+            f"DECISION FRAMEWORK - Before each action, ask yourself:\n"
+            f"1. Do I KNOW enough to write the code? If yes -> write_file or run_python\n"
+            f"2. Do I need to READ a file to understand something? If yes -> read_file\n"
+            f"3. Is my code WORKING? If no -> fix the specific error shown in the result\n"
+            f"4. Is my code TESTED and passing? If yes -> say DONE\n\n"
+            f"RULES:\n"
+            f"- Do NOT search the web. You already know how to write Python.\n"
+            f"- After reading files, write code IMMEDIATELY. Don't over-research.\n"
+            f"- When a test fails, read the ERROR MESSAGE and fix that SPECIFIC bug.\n"
+            f"- Don't rewrite the same code if it failed. Change the broken part only.\n"
+            f"- When testing, do NOT import agent.py or load MLX models (too slow).\n"
+            f"- Include 'ALL TESTS PASSED' print in your test block.\n"
+            f"- Call ONE tool per response.\n"
+            f"- When tests pass, say DONE."
+        )
 
-YOU MUST OUTPUT TOOL CALLS IN THIS EXACT FORMAT (no extra text):
-<tool>TOOL_NAME</tool>
-<args>{{"arg1": "value1", "arg2": "value2"}}</args>
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": f"Begin working on: {goal}"},
+        ]
 
-DO NOT write explanations or narrative. ONLY output tool calls.
+        phase = "research"
+        consecutive_no_tool = 0
+        tool_history: list[str] = []  # Track recent tool names for loop detection
 
-PHASES:
-1. RESEARCH: Use web_search to find information
-2. IMPLEMENTATION: Use run_python to write code
-3. SAVE: Use write_file to save results
+        for step in range(1, CONFIG.max_iterations + 1):
+            # Generate response
+            response = self._generate_response(messages)
 
-Tool definitions:
-- web_search: {{"query": "your search query"}}
-- run_python: {{"code": "print('hello')"}}
-- write_file: {{"path": "filename.py", "content": "import sys\\nprint('code')"}}
-- read_file: {{"path": "filename.py"}}
+            print(f"\n[Step {step}] Phase: {phase}")
+            # Show first 300 chars of response
+            display = response[:300].replace("\n", "\n  ")
+            print(f"  {display}")
 
-OUTPUT NOW WITH TOOL CALL. No narrative."""
+            # Check for completion
+            if "DONE" in response and step > 3:
+                print("\n✅ Agent signaled completion.")
+                break
 
-        response = self.chat("START", system=initial_system)
+            # Extract tool calls
+            tool_calls = self._extract_tool_calls(response)
 
-        consecutive_failures = 0
-        reflection_engine = ReflectionEngine(self.memory_manager.memory) if self.memory_manager else None
-        research_count = 0  # Track web_search calls per phase
-        phase = "research"  # Current phase
-        low_quality_search_count = 0  # Track consecutive low-quality searches
-        refined_query_attempts = 0  # Track refined query attempts
+            if not tool_calls:
+                consecutive_no_tool += 1
+                print(f"  ⚠️ No tool call detected ({consecutive_no_tool}/3)")
 
-        for iteration in range(CONFIG.max_iterations):
-            print(f"\n[Step {iteration + 1}] Phase: {phase}")
-            print(response[:250])
-
-            # Parse tool calls - MORE FORGIVING (model often adds text around them)
-            tool_pattern = r"<tool>(\w+)</tool>\s*<args>({.*?})</args>"
-            matches = re.findall(tool_pattern, response, re.DOTALL)
-
-            # If no matches, try to extract from narrative (model writes "I'll use web_search")
-            if not matches:
-                # Look for tool names mentioned
-                narrative = response.lower()
-                if "web_search" in narrative:
-                    # Extract query from narrative if possible
-                    query_match = re.search(r'(?:search|query|find)["\']?:?\s*["\']?([^"\'<>\n]+)', response, re.IGNORECASE)
-                    query = query_match.group(1).strip() if query_match else "polymarket data"
-                    matches = [("web_search", f'{{"query": "{query}"}}')]
-                elif "run_python" in narrative:
-                    # Extract code if possible
-                    code_match = re.search(r'```python\s*(.*?)```', response, re.DOTALL)
-                    if code_match:
-                        code = code_match.group(1).strip().replace('"', r'\"')
-                        matches = [("run_python", f'{{"code": "{code[:500]}"}}')]
+                if consecutive_no_tool >= 3:
+                    print("  🔨 Forcing tool execution")
+                    # Force based on phase
+                    if phase == "research":
+                        tool_calls = [{"name": "web_search", "arguments": {"query": goal[:80]}}]
+                    elif phase == "code":
+                        tool_calls = [{"name": "run_python", "arguments": {"code": "print('test')"}}]
                     else:
-                        matches = [("run_python", '{"code": "print(\'test\')"}')]
-                elif "write_file" in narrative or "save" in narrative:
-                    # Try to extract actual code from narrative
-                    code_match = re.search(r'```(?:python|)\s*(.*?)```', response, re.DOTALL)
-                    if code_match:
-                        code_content = code_match.group(1).strip()
-                        code_content = code_content.replace('"', r'\"').replace('\n', '\\n')
-                        filename = "solution.py" if "python" in narrative else "output.txt"
-                        matches = [("write_file", f'{{"path": "{filename}", "content": "{code_content[:1000]}"}}')]
-                    else:
-                        # Last resort: extract class or function definition
-                        def_match = re.search(r'(?:class|def) \w+.*?(?=\n(?:class|def|$))', response, re.DOTALL)
-                        if def_match:
-                            code_content = def_match.group(0).replace('"', r'\"').replace('\n', '\\n')
-                            matches = [("write_file", f'{{"path": "solution.py", "content": "{code_content[:1000]}"}}')]
-                        else:
-                            matches = [("write_file", '{"path": "output.py", "content": "# TODO: implement"}')]
-
-            # Filter out invalid tool names (must be in allowed list)
-            valid_tools = {"web_search", "run_python", "bash", "read_file", "write_file", "write_config", "spawn_subagent", "evaluate_version"}
-            matches = [(t, a) for t, a in matches if t in valid_tools]
-
-            if not matches:
-                # No tool call - FORCE tool execution
-                if iteration < CONFIG.max_iterations - 2:
-                    print("\n⚠️  No tool detected. FORCING execution...")
-                    consecutive_failures += 1
-
-                    # On 3rd failure, force actual tool execution (don't ask model)
-                    if consecutive_failures >= 3:
-                        print("   🔨 FORCE-EXECUTING TOOL (model not cooperating)")
-                        # Force execute based on phase
-                        if phase == "research":
-                            forced_result = self._web_search(f"Polymarket {goal[:50]}")
-                            print(f"   → Forced web_search: {forced_result[:80]}...")
-                            if self.memory_manager:
-                                self.memory_manager.record_attempt(
-                                    step=iteration + 1,
-                                    tool="web_search",
-                                    args={},
-                                    result=forced_result[:200],
-                                    success=True,
-                                    learning="Forced execution"
-                                )
-                            research_count += 1
-                            response = self.chat("Continue. Next tool: run_python to write code.")
-                            consecutive_failures = 0
-                            continue
-                        elif phase == "code":
-                            code = "import json\nprint('Testing API connectivity')"
-                            forced_result = self._run_python(code)
-                            print(f"   → Forced run_python: {forced_result[:80]}...")
-                            if self.memory_manager:
-                                self.memory_manager.record_attempt(
-                                    step=iteration + 1,
-                                    tool="run_python",
-                                    args={},
-                                    result=forced_result[:200],
-                                    success=True,
-                                    learning="Forced execution"
-                                )
-                            phase = "save"
-                            response = self.chat("Now save the result with write_file.")
-                            consecutive_failures = 0
-                            continue
-
-                    if consecutive_failures > 6:
-                        print("\n❌ Too many failures. Stopping.")
-                        break
-
-                    # Otherwise, reflection prompt with actual tool call
-                    if reflection_engine:
-                        reflection_prompt = reflection_engine.get_reflection_prompt()
-                        print(f"   Trying: {reflection_prompt[:150]}")
-                        response = self.chat(reflection_prompt)
-                    else:
-                        response = self.chat("<tool>web_search</tool>\n<args>{\"query\": \"polymarket data\"}</args>")
-                    continue
+                        tool_calls = [{"name": "write_file", "arguments": {"path": "output.py", "content": "# TODO"}}]
+                    consecutive_no_tool = 0
                 else:
-                    # Near end - done
-                    print("\n✅ Agent completed.")
-                    break
+                    # Add response and ask model to use tools
+                    messages.append({"role": "assistant", "content": response})
+                    messages.append({"role": "user", "content": "Please call a tool to make progress. Use web_search, run_python, or write_file."})
+                    continue
+            else:
+                consecutive_no_tool = 0
 
-            # AGGRESSIVE phase tracking - force progression
-            if matches and self.memory_manager:
-                tool_name = matches[0][0]
-                recent_tools = [it.tool_used for it in self.memory_manager.memory.iterations[-3:]]
+            # Execute each tool call
+            for call in tool_calls[:1]:  # Execute one at a time for control
+                name = call["name"]
+                args = call["arguments"]
 
-                # Track research phase
-                if tool_name == "web_search":
-                    research_count += 1
-                    phase = "research"
-
-                    # SMART QUALITY-BASED DECISIONS
-                    avg_relevance = getattr(self, '_last_search_quality', {}).get('average_relevance', 0.5)
-
-                    if avg_relevance < 0.4:
-                        low_quality_search_count += 1
-                        print(f"  🔴 LOW quality search (score: {avg_relevance:.2f})")
-
-                        # If low quality and haven't tried refined queries yet, force refinement
-                        if refined_query_attempts < 2:
-                            refined_query_attempts += 1
-                            suggestion = self._suggest_refined_query(goal)
-                            print(f"  🔄 Forcing refined search: '{suggestion}'")
-                            response = self.chat(f"Last search had low-quality results. Try this refined query instead: '{suggestion}'")
-                            continue
-                        else:
-                            # Tried refined queries but still low quality - move to code anyway
-                            print(f"  ⚠️  Low quality persists after {refined_query_attempts} refinements - moving to code")
-                            phase = "code"
-                            response = self.chat("Quality is low despite refinements. NOW: Write working Python code to solve this.")
-                            continue
-                    else:
-                        low_quality_search_count = 0  # Reset if quality improves
-                        refined_query_attempts = 0
-
-                elif tool_name == "run_python":
-                    phase = "code"
-                    research_count = 0
-                elif tool_name == "write_file":
-                    phase = "save"
-
-                # FORCE phase transition: 3 web_searches with GOOD quality = move to code
-                if research_count >= 3 and phase == "research":
-                    avg_relevance = getattr(self, '_last_search_quality', {}).get('average_relevance', 0.5)
-                    if avg_relevance >= 0.4:
-                        print(f"  ⚠️  Research limit (3) reached with acceptable quality - FORCING code phase")
-                        response = self.chat("You've researched enough. NOW: Write working Python code. Use run_python with complete, working code.")
-                        continue
-                    else:
-                        print(f"  ⚠️  Research limit reached but quality is low - trying refined search")
-                        suggestion = self._suggest_refined_query(goal)
-                        response = self.chat(f"Try this more refined search: '{suggestion}'")
-                        continue
-
-                # FORCE: If last 2 were web_search with good quality, next MUST be code
-                if len(recent_tools) >= 2 and recent_tools[-2:] == ["web_search", "web_search"]:
-                    avg_relevance = getattr(self, '_last_search_quality', {}).get('average_relevance', 0.5)
-                    if avg_relevance >= 0.5:
-                        print(f"  ⚠️  2 researches with good quality detected - FORCING code phase now")
-                        response = self.chat("STOP researching. Write and run Python code NOW.")
-                        continue
-
-                # Detect loops - if same tool 3+ times, check if it's productive
-                if len(set(recent_tools)) == 1 and recent_tools[0] == tool_name:
-                    # Same tool used 3+ times - check if results are different
-                    current_tool = tool_name
-
-                    if self.memory_manager and len(self.memory_manager.memory.iterations) >= 3:
-                        recent_results = [it.result[:100] for it in self.memory_manager.memory.iterations[-3:]]
-                        unique_results = len(set(recent_results))
-
-                        # Only force if getting identical results (real loop)
-                        if unique_results <= 1:
-                            print(f"  🔄 LOOP DETECTED ({current_tool}x3 identical results) - Need different approach")
-                            if current_tool == "web_search":
-                                response = self.chat("You're getting the same search results repeatedly. Try a completely different search query - maybe search for 'tutorial' or 'documentation' instead.")
-                            elif current_tool == "run_python":
-                                response = self.chat("Your code keeps producing the same error. Debug the issue or try a different approach to the problem.")
-                            else:
-                                response = self.chat("You're repeating the same action with the same result. Change your strategy.")
-                            continue
-                        else:
-                            # Different results each time - probably making progress, don't force
-                            print(f"  ℹ️  Same tool used 3x but with different results - likely making progress, continuing...")
-                    else:
-                        # Not enough history, don't force yet
-                        print(f"  ℹ️  Same tool used multiple times, continuing...")
-
-            # Execute tools
-            for tool_name, args_str in matches:
-                try:
-                    # Try to parse JSON - handle common issues
-                    args_str_clean = args_str.strip()
-                    if not args_str_clean.startswith('{'):
-                        args_str_clean = '{' + args_str_clean
-                    if not args_str_clean.endswith('}'):
-                        args_str_clean = args_str_clean + '}'
-                    args = json.loads(args_str_clean)
-                except Exception as e:
-                    # If JSON fails, create basic args from tool name
-                    if tool_name == "web_search":
-                        args = {"query": "prediction markets"}
-                    elif tool_name == "run_python":
-                        args = {"code": "print('retry')"}
-                    else:
-                        args = {}
-
-                print(f"  🔧 {tool_name}()")
-                result = self.execute_tool(tool_name, args)
-                result_preview = result[:120].replace("\n", " ")
-                print(f"  → {result_preview}...")
+                print(f"  🔧 {name}({json.dumps(args)[:80]})")
+                self.logger.tool_call(step, name, args)
+                result = self.execute_tool(name, args)
+                result_preview = result[:200].replace("\n", " ")
+                print(f"  → {result_preview}")
+                success = not result.startswith("ERROR")
+                self.logger.tool_result(step, name, success, result_preview)
 
                 # Track in memory
                 success = not result.startswith("ERROR")
+                self._perf["tool_success"]["total"] += 1
+                if success:
+                    self._perf["tool_success"]["success"] += 1
                 if self.memory_manager:
-                    learning = (
-                        "Success" if success else
-                        "Failed: Will try different approach"
-                    )
                     self.memory_manager.record_attempt(
-                        step=iteration + 1,
-                        tool=tool_name,
-                        args=args,
-                        result=result[:300],
-                        success=success,
-                        learning=learning,
+                        step=step, tool=name, args=args,
+                        result=result[:500], success=success,
+                        learning="OK" if success else result[:80],
                     )
+                    if success and name == "web_search":
+                        self.memory_manager.record_discovery(result[:200])
 
-                    # IMPORTANT: Record discoveries from successful searches/code runs
-                    if success:
-                        if tool_name == "web_search" and "Search Results" in result:
-                            # Extract URLs and summaries as discoveries
-                            lines = result.split("\n")
-                            for line in lines[:3]:  # Top 3 results
-                                if line.strip():
-                                    self.memory_manager.memory.discoveries.append(line.strip()[:200])
-                        elif tool_name == "run_python" and not "ERROR" in result:
-                            # Code execution success
-                            self.memory_manager.memory.discoveries.append(
-                                f"Code executed successfully: {result[:100]}"
-                            )
+                # Update tool history for loop detection
+                tool_history.append(name)
 
-                    if not success:
-                        self.memory_manager.record_failure(
-                            tool_name, result[:80]
-                        )
+                # Loop detection: same tool 3+ times
+                if len(tool_history) >= 3 and len(set(tool_history[-3:])) == 1:
+                    # Check if results are similar
+                    recent = self.memory_manager.memory.iterations[-3:]
+                    results_set = set(it.result[:100] for it in recent)
+                    if len(results_set) <= 1:
+                        print(f"  🔄 LOOP: {name} x3 with same results - switching")
+                        self.logger.loop_detected(step, name, 3)
+                        old_phase = phase
+                        if name == "web_search":
+                            phase = "code"
+                        elif name == "run_python":
+                            phase = "save"
+                        self.logger.phase_change(step, old_phase, phase, f"loop on {name}")
+                        tool_history.clear()
 
-                consecutive_failures = 0
+                # Phase transitions
+                if name == "web_search":
+                    phase = "research"
+                elif name == "run_python":
+                    phase = "code"
+                elif name == "write_file":
+                    phase = "save"
 
-            # CRITICAL: Update system context with current progress (prevent memory loss)
-            memory_context = self._build_memory_context()
+                # Add to conversation as tool response
+                messages.append({"role": "assistant", "content": response})
+                # Give model FULL file contents - we have 128K context, use it
+                messages.append({"role": "tool", "content": result[:20000]})
 
-            # Periodic reflection (every 5 iterations) OR phase-based prompts
-            if reflection_engine and reflection_engine.should_reflect():
-                print("\n💭 Reflecting...")
-                reflection_prompt = reflection_engine.get_reflection_prompt()
-                # Add memory context to reflection
-                response = self.chat(f"{memory_context}\n\n{reflection_prompt}")
-            else:
-                # AGGRESSIVE phase-based continuation WITH full context
-                if phase == "research":
-                    prompt = f"{memory_context}\n\nStep {iteration+1}: Continue researching. Find more specific info with web_search about the problem."
-                elif phase == "code":
-                    prompt = f"{memory_context}\n\nStep {iteration+1}: Based on what you learned, write and test Python code with run_python."
-                elif phase == "save":
-                    prompt = f"{memory_context}\n\nStep {iteration+1}: Save your code to a file using write_file."
-                else:
-                    prompt = f"{memory_context}\n\nStep {iteration+1}: Continue. What's next?"
+            # Keep conversation manageable but preserve enough context
+            if len(messages) > 60:
+                # Keep system + last 56 messages - we have 128K context, USE IT ALL
+                mem_ctx = self._build_memory_context()
+                messages = messages[:1] + [
+                    {"role": "user", "content": f"CONTEXT: {mem_ctx}\nDo NOT re-read files you already read. Use the information you have."}
+                ] + messages[-56:]
 
-                response = self.chat(prompt)
+            # Phase forcing after enough research
+            research_count = sum(1 for t in tool_history[-5:] if t == "web_search")
+            if research_count >= 3 and phase == "research":
+                print(f"  ⚠️ 3+ searches done - moving to code phase")
+                phase = "code"
+                messages.append({
+                    "role": "user",
+                    "content": "You've done enough research. Now write Python code to implement what you learned. Use run_python.",
+                })
 
-        print("\n🛑 Session complete.")
+            # Force save phase after enough code runs
+            code_count = sum(1 for t in tool_history[-6:] if t == "run_python")
+            if code_count >= 4 and phase == "code":
+                print(f"  ⚠️ 4+ code runs - moving to save phase")
+                phase = "save"
+                messages.append({
+                    "role": "user",
+                    "content": "You've tested enough. Now SAVE your best code to a file using write_file. Include the complete working code.",
+                })
+
+        # Save session
+        if self.memory_manager:
+            self.memory_manager.memory.save(self.memory_manager.memory_file)
+
+        # Log run end
+        self.logger.run_end(step, self._perf)
+
+        # Performance summary
+        p = self._perf
+        avg_tok_s = p["total_tokens"] / max(0.01, p["total_gen_time"])
+        success_rate = p["tool_success"]["success"] / max(1, p["tool_success"]["total"])
+        avg_step = sum(p["step_times"]) / max(1, len(p["step_times"]))
+        print(f"\n📊 Performance: {avg_tok_s:.0f} tok/s avg | {p['total_tokens']} tokens | {success_rate:.0%} tool success | {avg_step:.1f}s/step")
+        print("🛑 Session complete.")
 
 
 def main() -> None:
-    """CLI entry point using config-driven model selection."""
+    """CLI entry point."""
     if len(sys.argv) < 2:
         print("Usage: python agent.py '<goal>'")
-        print(f"\nConfiguration: {CONFIG.models.keys()}")
-        print("MLX optimized for Apple Silicon — ~60 tok/s on M-series")
         sys.exit(1)
 
     goal = " ".join(sys.argv[1:])
-
-    # Use BALANCED model (14B) - better instruction-following than 8B, faster than 32B
-    print("🧠 Using BALANCED model (Qwen3-14B) for better instruction-following")
-    model_name = "balanced"
-
-    agent = MLXAgent(config_model_name=model_name, goal=goal)
+    # Default to tool_calling (Qwen3-14B, proven 0.971 F1)
+    model = os.environ.get("AGENT_MODEL", "tool_calling")
+    agent = MLXAgent(config_model_name=model, goal=goal)
     agent.run_loop(goal)
 
 

@@ -1,0 +1,6 @@
+Skill Name: Smart Tool Router
+File: smart_router.py
+Tier: 3
+Prereqs: confidence_scorer, loop_detector, task_planner
+Description: Dynamically selects the best tool for the current task based on confidence scores, loop detection, and task planning
+Spec: Class SmartToolRouter with methods select_tool(task) -> str, update_router(metrics) -> None, and a router_state attribute tracking tool performance and usage patterns
