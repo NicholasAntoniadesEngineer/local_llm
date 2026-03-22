@@ -91,9 +91,10 @@ class SkillTree:
     # ── Database ──────────────────────────────────────────────────────────
 
     def _conn(self):
-        c = sqlite3.connect(self.db_path)
+        c = sqlite3.connect(self.db_path, timeout=10)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA busy_timeout=5000")
         return c
 
     def _init_db(self):

@@ -785,9 +785,10 @@ class MLXAgent:
                 else:
                     messages.pop(1)
 
-            # Force save phase after enough code runs
-            code_count = sum(1 for t in tool_history[-6:] if t == "run_python")
-            if code_count >= 4 and phase == "code":
+            # Force save phase after enough code runs (count from messages)
+            recent_tools = [m.get("content", "")[:20] for m in messages[-12:] if m.get("role") == "assistant"]
+            code_runs = sum(1 for t in recent_tools if "run_python" in t)
+            if code_runs >= 4 and phase == "code":
                 print(f"  ⚠️ 4+ code runs - moving to save phase")
                 phase = "save"
                 messages.append({
