@@ -19,6 +19,7 @@ from typing import Optional
 from src.config import CONFIG
 from src.memory import MemoryManager
 from src.logger import AgentLogger
+from src.skill_tree import SkillTree
 
 
 # Tool definitions in OpenAI-compatible format (what Qwen3 was trained on)
@@ -113,6 +114,7 @@ class MLXAgent:
         self.config_model = CONFIG.models[config_model_name]
         self.memory_manager = MemoryManager(goal) if goal else None
         self.logger = AgentLogger()
+        self.skill_tree = SkillTree()
         self._search_cache: dict[str, str] = {}
         self._search_quality: float = 0.5
 
@@ -625,6 +627,16 @@ class MLXAgent:
         tool_history: list[str] = []  # Track recent tool names for loop detection
 
         for step in range(1, CONFIG.max_iterations + 1):
+            # Inject skill focus every 5 steps or on failure
+            if step % 5 == 1 or (step > 1 and not self._perf["tool_success"].get("last_ok", True)):
+                try:
+                    nxt = self.skill_tree.get_next_skill()
+                    if nxt and nxt.get("current_impact", 0) > 7:
+                        messages.append({"role": "user", "content":
+                            f"Focus on mastering: {nxt['name']} — {nxt.get('description', '')}"})
+                except Exception:
+                    pass
+
             # Generate response
             response = self._generate_response(messages)
 

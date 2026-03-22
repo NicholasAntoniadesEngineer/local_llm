@@ -1,70 +1,97 @@
 """
-SkillTree v2: Self-learning, self-growing agent brain.
+SkillTree v3 – Autonomous Self-Improving Brain.
 
-Backed by SQLite for persistence + networkx DiGraph for DAG operations.
-The agent can propose new skills, and impact scores evolve based on results.
+═══════════════════════════════════════════════════════════════════════════
+SQLite persistence + networkx DiGraph + sentence-transformer embeddings.
+UCB1 bandit scoring. LLM-driven proposal generation. Fully automated
+implement → test → integrate loops. The agent grows its own brain.
+═══════════════════════════════════════════════════════════════════════════
 """
 
 import json
+import math
 import os
+import re
 import sqlite3
 import subprocess
-import heapq
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+import numpy as np
 import networkx as nx
+from sentence_transformers import SentenceTransformer
 
 from src.paths import SKILLS_DIR, RUNS_DIR
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SEED DATA: Initial skills (used for first-run migration only)
+# SEED DATA (first-run migration only)
 # ═══════════════════════════════════════════════════════════════════════════
 
 SEED_SKILLS = [
-    {"id": "search_cache", "name": "Search Result Cache", "file": "search_cache.py", "tier": 1, "impact": 7, "prereqs": [],
+    {"id": "search_cache", "name": "Search Result Cache", "file": "search_cache.py", "tier": 1, "impact": 7, "prereqs": [], "domain": "memory",
      "description": "Cache web search results with TTL", "spec": "Class SearchCache with get/set/cleanup/stats.", "test_hint": "Set values, verify hits/misses, verify expiry"},
-    {"id": "metrics", "name": "Performance Metrics", "file": "metrics.py", "tier": 1, "impact": 6, "prereqs": [],
+    {"id": "metrics", "name": "Performance Metrics", "file": "metrics.py", "tier": 1, "impact": 6, "prereqs": [], "domain": "observability",
      "description": "Track tool calls, success rates, timing", "spec": "Class AgentMetrics with record_step/summary/report.", "test_hint": "Simulate 20 steps, verify counts"},
-    {"id": "memory_compressor", "name": "Memory Compression", "file": "memory_compressor.py", "tier": 1, "impact": 6, "prereqs": [],
+    {"id": "memory_compressor", "name": "Memory Compression", "file": "memory_compressor.py", "tier": 1, "impact": 6, "prereqs": [], "domain": "memory",
      "description": "Compress old session iterations", "spec": "Function compress_session(iterations, keep_recent=10).", "test_hint": "50 iterations compressed to <=10"},
-    {"id": "error_recovery", "name": "Error Recovery", "file": "error_recovery.py", "tier": 1, "impact": 8, "prereqs": [],
+    {"id": "error_recovery", "name": "Error Recovery", "file": "error_recovery.py", "tier": 1, "impact": 8, "prereqs": [], "domain": "routing",
      "description": "Retry with backoff and error classification", "spec": "Class ErrorRecovery with classify/suggest/should_retry/backoff.", "test_hint": "Test each error type and retry logic"},
-    {"id": "code_validator", "name": "Code Validator", "file": "code_validator.py", "tier": 1, "impact": 9, "prereqs": [],
+    {"id": "code_validator", "name": "Code Validator", "file": "code_validator.py", "tier": 1, "impact": 9, "prereqs": [], "domain": "self_improvement",
      "description": "Validate Python: syntax, imports, tests", "spec": "Class CodeValidator with check_syntax/check_imports/run_tests/validate_all.", "test_hint": "Valid code, syntax error, missing import"},
-    {"id": "loop_detector", "name": "Loop Detector", "file": "loop_detector.py", "tier": 2, "impact": 8, "prereqs": ["metrics"],
+    {"id": "loop_detector", "name": "Loop Detector", "file": "loop_detector.py", "tier": 2, "impact": 8, "prereqs": ["metrics"], "domain": "routing",
      "description": "Detect repeated actions with similar results", "spec": "Class LoopDetector with record/is_stuck/suggest_escape/similarity.", "test_hint": "3 identical=stuck, different=not stuck"},
-    {"id": "confidence_scorer", "name": "Confidence Scorer", "file": "confidence_scorer.py", "tier": 2, "impact": 9, "prereqs": ["metrics", "error_recovery"],
+    {"id": "confidence_scorer", "name": "Confidence Scorer", "file": "confidence_scorer.py", "tier": 2, "impact": 9, "prereqs": ["metrics", "error_recovery"], "domain": "planning",
      "description": "Score agent confidence for decisions", "spec": "Class ConfidenceScorer with knowledge/capability/progress/should_act/overall.", "test_hint": "Low=research, high=save, errors=abort"},
-    {"id": "result_evaluator", "name": "Result Evaluator", "file": "result_evaluator.py", "tier": 2, "impact": 7, "prereqs": ["search_cache"],
+    {"id": "result_evaluator", "name": "Result Evaluator", "file": "result_evaluator.py", "tier": 2, "impact": 7, "prereqs": ["search_cache"], "domain": "routing",
      "description": "Evaluate quality of tool results", "spec": "Class ResultEvaluator with score_search/score_code/is_duplicate/summarize.", "test_hint": "Relevant=high, junk=low, duplicate detection"},
-    {"id": "task_planner", "name": "Task Planner", "file": "task_planner.py", "tier": 2, "impact": 8, "prereqs": ["error_recovery"],
+    {"id": "task_planner", "name": "Task Planner", "file": "task_planner.py", "tier": 2, "impact": 8, "prereqs": ["error_recovery"], "domain": "planning",
      "description": "Decompose goals into ordered subtasks", "spec": "Class TaskPlanner with decompose/next_task/is_complete/replan.", "test_hint": "Decompose into 5+ steps, verify ordering"},
-    {"id": "smart_router", "name": "Smart Tool Router", "file": "smart_router.py", "tier": 3, "impact": 9, "prereqs": ["confidence_scorer", "loop_detector", "task_planner"],
+    {"id": "smart_router", "name": "Smart Tool Router", "file": "smart_router.py", "tier": 3, "impact": 9, "prereqs": ["confidence_scorer", "loop_detector", "task_planner"], "domain": "routing",
      "description": "Pick optimal tool given current state", "spec": "Class SmartRouter with pick_tool/should_change_phase/format_tool_prompt.", "test_hint": "Low confidence=search, loop=phase change"},
-    {"id": "self_evaluator", "name": "Self Evaluator", "file": "self_evaluator.py", "tier": 3, "impact": 10, "prereqs": ["code_validator", "result_evaluator", "metrics"],
+    {"id": "self_evaluator", "name": "Self Evaluator", "file": "self_evaluator.py", "tier": 3, "impact": 10, "prereqs": ["code_validator", "result_evaluator", "metrics"], "domain": "self_improvement",
      "description": "Evaluate own output quality before saving", "spec": "Class SelfEvaluator with evaluate_file returning scores and recommendation.", "test_hint": "Good=keep, error=discard, no tests=fix"},
-    {"id": "orchestrator", "name": "Agent Orchestrator", "file": "orchestrator.py", "tier": 4, "impact": 10, "prereqs": ["smart_router", "self_evaluator"],
+    {"id": "orchestrator", "name": "Agent Orchestrator", "file": "orchestrator.py", "tier": 4, "impact": 10, "prereqs": ["smart_router", "self_evaluator"], "domain": "planning",
      "description": "Master controller wiring all modules", "spec": "Class Orchestrator with plan_cycle/decide_next/evaluate_progress/post_mortem.", "test_hint": "Empty state=plan, done=save, loop=escape"},
-    {"id": "strategy_learner", "name": "Strategy Learner", "file": "strategy_learner.py", "tier": 4, "impact": 10, "prereqs": ["orchestrator", "self_evaluator"],
+    {"id": "strategy_learner", "name": "Strategy Learner", "file": "strategy_learner.py", "tier": 4, "impact": 10, "prereqs": ["orchestrator", "self_evaluator"], "domain": "self_improvement",
      "description": "Learn what strategies work for what tasks", "spec": "Class StrategyLearner with record_outcome/best_strategy/avoid_strategy/recommend.", "test_hint": "20 outcomes, verify best/worst"},
 ]
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Evolution log
+# ═══════════════════════════════════════════════════════════════════════════
+
+EVOLUTION_LOG = RUNS_DIR / "skill_tree_evolution.log"
+
+
+def _evo_log(msg: str):
+    """Append to the evolution log."""
+    EVOLUTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(EVOLUTION_LOG, "a") as f:
+        f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+
 
 class SkillTree:
-    """Self-learning, self-growing skill DAG."""
+    """Autonomous self-improving brain: UCB1 + embeddings + LLM evolution."""
 
     def __init__(self, db_path: str = None):
         self.db_path = db_path or str(RUNS_DIR / "skill_tree.db")
         self.graph = nx.DiGraph()
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # Semantic embedder (CPU to stay lightweight)
+        self.embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+
         self._init_db()
+        self._migrate_v3()
         if self._count() == 0:
             self._seed()
         self._load_graph()
         self._scan_completed()
+        self._ensure_embeddings()
+
+    # ── Database ──────────────────────────────────────────────────────────
 
     def _conn(self):
         c = sqlite3.connect(self.db_path)
@@ -80,7 +107,9 @@ class SkillTree:
                     base_impact REAL, current_impact REAL, level INTEGER DEFAULT 1,
                     status TEXT DEFAULT 'locked', description TEXT, spec TEXT,
                     test_hint TEXT, last_updated TEXT, fail_count INTEGER DEFAULT 0,
-                    success_count INTEGER DEFAULT 0, proposed_by TEXT DEFAULT 'system'
+                    success_count INTEGER DEFAULT 0, proposed_by TEXT DEFAULT 'system',
+                    embedding BLOB, pull_count INTEGER DEFAULT 0,
+                    domain TEXT DEFAULT 'general', version TEXT DEFAULT '1.0'
                 );
                 CREATE TABLE IF NOT EXISTS prereqs (
                     skill_id TEXT, prereq_id TEXT, PRIMARY KEY (skill_id, prereq_id)
@@ -90,6 +119,21 @@ class SkillTree:
                     event TEXT, timestamp TEXT, details TEXT
                 );
             """)
+
+    def _migrate_v3(self):
+        """Add v3 columns if upgrading from v2 DB."""
+        with self._conn() as c:
+            cols = {row[1] for row in c.execute("PRAGMA table_info(skills)")}
+            migrations = {
+                "embedding": "ALTER TABLE skills ADD COLUMN embedding BLOB",
+                "pull_count": "ALTER TABLE skills ADD COLUMN pull_count INTEGER DEFAULT 0",
+                "domain": "ALTER TABLE skills ADD COLUMN domain TEXT DEFAULT 'general'",
+                "version": "ALTER TABLE skills ADD COLUMN version TEXT DEFAULT '1.0'",
+            }
+            for col, sql in migrations.items():
+                if col not in cols:
+                    c.execute(sql)
+                    _evo_log(f"MIGRATION: Added column {col}")
 
     def _count(self):
         with self._conn() as c:
@@ -108,7 +152,8 @@ class SkillTree:
                 self.graph.add_edge(r["prereq_id"], r["skill_id"])
 
     def _scan_completed(self):
-        for nid in self.graph.nodes:
+        """Detect passing skill files on disk."""
+        for nid in list(self.graph.nodes):
             n = self.graph.nodes[nid]
             if n.get("status") == "completed":
                 continue
@@ -140,13 +185,58 @@ class SkillTree:
     def _skill_dict(self, sid):
         with self._conn() as c:
             r = c.execute("SELECT * FROM skills WHERE id=?", (sid,)).fetchone()
-            if not r: return None
+            if not r:
+                return None
             prereqs = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?", (sid,))]
             return {**dict(r), "prereqs": prereqs}
+
+    def _save_node(self, sid):
+        """Persist a single graph node's pull_count back to DB."""
+        n = self.graph.nodes.get(sid)
+        if not n:
+            return
+        with self._conn() as c:
+            c.execute("UPDATE skills SET pull_count=? WHERE id=?", (n.get("pull_count", 0), sid))
+
+    # ── Semantic Layer ────────────────────────────────────────────────────
+
+    def _embed(self, skill_dict: dict) -> np.ndarray:
+        """Compute normalized embedding for a skill."""
+        desc = f"{skill_dict.get('name', '')}: {skill_dict.get('description', '')} | Spec: {skill_dict.get('spec', '')}"
+        return self.embedder.encode(desc, normalize_embeddings=True).astype(np.float32)
+
+    def _store_embedding(self, skill_id: str, embedding: np.ndarray):
+        """Save embedding as BLOB."""
+        with self._conn() as c:
+            c.execute("UPDATE skills SET embedding=? WHERE id=?", (embedding.tobytes(), skill_id))
+
+    def _load_embedding(self, skill_id: str) -> Optional[np.ndarray]:
+        """Load embedding from DB."""
+        with self._conn() as c:
+            r = c.execute("SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()
+            if r and r["embedding"]:
+                return np.frombuffer(r["embedding"], dtype=np.float32)
+        return None
+
+    def _ensure_embeddings(self):
+        """Compute embeddings for all skills that don't have one yet."""
+        with self._conn() as c:
+            for r in c.execute("SELECT id, name, description, spec FROM skills WHERE embedding IS NULL"):
+                emb = self._embed(dict(r))
+                self._store_embedding(r["id"], emb)
+
+    def get_skill_embedding_similarity(self, skill1: str, skill2: str) -> float:
+        """Cosine similarity between two skill embeddings."""
+        e1 = self._load_embedding(skill1)
+        e2 = self._load_embedding(skill2)
+        if e1 is None or e2 is None:
+            return 0.0
+        return float(np.dot(e1, e2))
 
     # ── Core API ──────────────────────────────────────────────────────────
 
     def add_skill(self, skill):
+        """Add or update a skill with cycle detection + embedding."""
         sid, prereqs = skill["id"], skill.get("prereqs", [])
         g = self.graph.copy()
         g.add_node(sid)
@@ -155,44 +245,59 @@ class SkillTree:
         if not nx.is_directed_acyclic_graph(g):
             raise ValueError(f"Cycle detected adding {sid}")
 
+        domain = skill.get("domain", "general")
         with self._conn() as c:
             c.execute("""INSERT OR REPLACE INTO skills
-                (id,name,file,tier,base_impact,current_impact,status,description,spec,test_hint,last_updated,proposed_by)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (id,name,file,tier,base_impact,current_impact,status,description,spec,test_hint,
+                 last_updated,proposed_by,domain,version,pull_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (sid, skill["name"], skill["file"], skill["tier"], skill["impact"], skill["impact"],
-                 "locked", skill.get("description",""), skill.get("spec",""), skill.get("test_hint",""),
-                 datetime.now().isoformat(), skill.get("proposed_by","system")))
+                 "locked", skill.get("description", ""), skill.get("spec", ""), skill.get("test_hint", ""),
+                 datetime.now().isoformat(), skill.get("proposed_by", "system"),
+                 domain, skill.get("version", "1.0"), 0))
             c.execute("DELETE FROM prereqs WHERE skill_id=?", (sid,))
             for p in prereqs:
                 c.execute("INSERT OR IGNORE INTO prereqs VALUES (?,?)", (sid, p))
 
-        self.graph.add_node(sid, **skill)
+        self.graph.add_node(sid, **{**skill, "status": "locked", "current_impact": skill["impact"],
+                                     "pull_count": 0, "fail_count": 0, "domain": domain})
         for p in prereqs:
             self.graph.add_edge(p, sid)
+
+        # Compute + store embedding
+        emb = self._embed(skill)
+        self._store_embedding(sid, emb)
+
         return sid
 
-    def get_next_skill(self):
-        candidates = []
-        max_d = max((len(nx.ancestors(self.graph, n)) for n in self.graph.nodes), default=1) or 1
+    def get_next_skill(self) -> Optional[dict]:
+        """UCB1 bandit – balances high-impact skills with exploration of under-tested ones."""
+        if not self.graph.nodes:
+            return None
+
+        N = sum(self.graph.nodes[n].get("pull_count", 0) for n in self.graph.nodes) + 1
+        c = 1.41  # standard exploration constant
+
+        best_score = -float("inf")
+        best_node = None
 
         for nid in self.graph.nodes:
             if self._status(nid) == "completed" or not self.is_unlocked(nid):
                 continue
-            impact = self._field(nid, "current_impact") or 5
-            tier = self._field(nid, "tier") or 1
-            depth = len(nx.ancestors(self.graph, nid))
-            fails = self._field(nid, "fail_count") or 0
-            proposed = self._field(nid, "proposed_by") or "system"
+            data = self.graph.nodes[nid]
+            n = data.get("pull_count", 0) + 1e-6
+            r = self._field(nid, "current_impact") or data.get("impact", 5)
+            ucb = r + c * math.sqrt(math.log(N) / n)
 
-            score = impact * (1.6 ** (tier - 1)) * (1 - depth / (max_d + 1))
-            score += 0.5 if proposed == "agent" else 0
-            score -= fails * 0.3
-            heapq.heappush(candidates, (-score, nid))
+            if ucb > best_score:
+                best_score = ucb
+                best_node = nid
 
-        if not candidates:
-            return None
-        _, best = heapq.heappop(candidates)
-        return self._skill_dict(best)
+        if best_node:
+            self.graph.nodes[best_node]["pull_count"] = self.graph.nodes[best_node].get("pull_count", 0) + 1
+            self._save_node(best_node)
+
+        return self._skill_dict(best_node) if best_node else None
 
     def is_unlocked(self, sid):
         return all(self._status(p) == "completed" for p in self.graph.predecessors(sid))
@@ -215,14 +320,16 @@ class SkillTree:
     def update_impact_from_result(self, sid, gain):
         with self._conn() as c:
             r = c.execute("SELECT current_impact FROM skills WHERE id=?", (sid,)).fetchone()
-            if not r: return
+            if not r:
+                return
             new = min(10.0, r["current_impact"] + gain * 3.0)
             c.execute("UPDATE skills SET current_impact=? WHERE id=?", (new, sid))
         self._log(sid, "impact_change", f"gain={gain}")
         self._propagate(sid, gain * 0.3)
 
     def _propagate(self, sid, gain):
-        if abs(gain) < 0.01: return
+        if abs(gain) < 0.01:
+            return
         for s in self.graph.successors(sid):
             with self._conn() as c:
                 r = c.execute("SELECT current_impact FROM skills WHERE id=?", (s,)).fetchone()
@@ -232,8 +339,10 @@ class SkillTree:
     # ── Intelligence ──────────────────────────────────────────────────────
 
     def get_critical_path(self):
-        try: return nx.dag_longest_path(self.graph)
-        except: return []
+        try:
+            return nx.dag_longest_path(self.graph)
+        except Exception:
+            return []
 
     def get_system_weaknesses(self):
         lines = []
@@ -249,12 +358,17 @@ class SkillTree:
                 lines.append(f"Learned: {r['name']} is {d} important ({r['base_impact']:.0f}→{r['current_impact']:.1f})")
         return "\n".join(lines) if lines else "System is healthy"
 
+    # ── Evolution: LLM-driven self-growth ─────────────────────────────────
+
     def evolve_tree(self):
+        """Parse text-file proposals (v2 compat)."""
         f = SKILLS_DIR / "tree_proposals.txt"
-        if not f.exists(): return []
+        if not f.exists():
+            return []
         added = []
         for line in f.read_text().split("\n"):
-            if not line.startswith("SKILL:"): continue
+            if not line.startswith("SKILL:"):
+                continue
             parts = {}
             for seg in line.split("|"):
                 if ":" in seg:
@@ -269,11 +383,193 @@ class SkillTree:
                         "prereqs": [p.strip() for p in parts.get("prereqs", "").split(",") if p.strip()],
                         "description": parts.get("desc", ""), "spec": parts.get("spec", "Build with tests."),
                         "test_hint": "ALL TESTS PASSED", "proposed_by": "agent",
+                        "domain": parts.get("domain", "general"),
                     })
                     added.append(sid)
-                except ValueError: pass
-        if added: self._load_graph()
+                except ValueError:
+                    pass
+        if added:
+            self._load_graph()
         return added
+
+    def generate_proposals(self, num_proposals: int = 3) -> list:
+        """Use MLX model to propose NEW skills based on system state."""
+        from src.config import CONFIG
+        try:
+            from mlx_lm import load, generate
+            from mlx_lm.sample_utils import make_sampler
+        except ImportError:
+            _evo_log("PROPOSAL FAILED: mlx_lm not available")
+            return []
+
+        path = self.get_critical_path()
+        weak = self.get_system_weaknesses()
+        state = self.get_state()
+
+        prompt_text = f"""You are an expert AI systems architect. Here is the CURRENT skill tree state:
+
+Critical path: {path}
+Top weaknesses: {weak}
+Recent failures: {sum(s.get('fail_count', 0) for s in state['skills'])} total fails
+Total skills: {state['total']} | Completed: {state['completed']} | Avg impact: {sum(s.get('current_impact', 0) for s in state['skills']) / max(1, state['total']):.1f}
+
+Propose exactly {num_proposals} NEW skills that would unlock massive capability.
+Each proposal must be valid JSON object with:
+{{
+  "name": "...",
+  "description": "...",
+  "prereqs": ["existing_id1", "existing_id2"],
+  "tier": 2,
+  "estimated_impact": 8,
+  "test_hint": "...",
+  "domain": "routing|memory|planning|self_improvement"
+}}
+
+Output ONLY a JSON array. No explanation."""
+
+        try:
+            model_cfg = CONFIG.models.get("balanced") or CONFIG.models.get("tool_calling")
+            model, tokenizer = load(model_cfg.name)
+            sampler = make_sampler(temp=0.3)
+
+            messages = [{"role": "user", "content": prompt_text}]
+            formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            response = generate(model, tokenizer, prompt=formatted, max_tokens=2048, sampler=sampler)
+
+            # Strip thinking blocks
+            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+
+            # Extract JSON array
+            match = re.search(r"\[.*\]", response, re.DOTALL)
+            if not match:
+                _evo_log(f"PROPOSAL FAILED: No JSON array in response")
+                return []
+
+            proposals = json.loads(match.group())
+            valid = []
+            existing_ids = set(self.graph.nodes)
+
+            for p in proposals:
+                if not isinstance(p, dict) or "name" not in p:
+                    continue
+                # Validate prereqs exist
+                prereqs = p.get("prereqs", [])
+                if not all(pr in existing_ids for pr in prereqs):
+                    continue
+                sid = p["name"].lower().replace(" ", "_").replace("-", "_")
+                if sid in existing_ids:
+                    continue
+                valid.append({
+                    "id": sid,
+                    "name": p["name"],
+                    "file": f"{sid}.py",
+                    "tier": p.get("tier", 2),
+                    "impact": p.get("estimated_impact", 7),
+                    "prereqs": prereqs,
+                    "description": p.get("description", ""),
+                    "spec": p.get("description", ""),
+                    "test_hint": p.get("test_hint", "ALL TESTS PASSED"),
+                    "domain": p.get("domain", "general"),
+                    "proposed_by": "agent",
+                })
+
+            _evo_log(f"PROPOSALS: Generated {len(valid)} valid from {len(proposals)} raw")
+            del model, tokenizer  # Free GPU memory
+            return valid
+
+        except Exception as e:
+            _evo_log(f"PROPOSAL ERROR: {e}")
+            return []
+
+    def auto_implement(self, proposal: dict) -> bool:
+        """Generate code for a proposal, test it, integrate if passing."""
+        from src.config import CONFIG
+        try:
+            from mlx_lm import load, generate
+            from mlx_lm.sample_utils import make_sampler
+        except ImportError:
+            return False
+
+        sid = proposal["id"]
+        target = SKILLS_DIR / proposal["file"]
+
+        prompt_text = f"""Write a complete Python module for: {proposal['name']}
+
+Description: {proposal.get('description', '')}
+Spec: {proposal.get('spec', '')}
+Test requirements: {proposal.get('test_hint', '')}
+
+The module MUST:
+1. Be standalone (no importing agent.py or loading MLX models)
+2. Include 'if __name__ == "__main__":' test block
+3. Print 'ALL TESTS PASSED' when all tests pass
+4. Use type hints and docstrings
+
+Output ONLY the Python code. No explanation."""
+
+        try:
+            model_cfg = CONFIG.models.get("balanced") or CONFIG.models.get("tool_calling")
+            model, tokenizer = load(model_cfg.name)
+            sampler = make_sampler(temp=0.2)
+
+            messages = [{"role": "user", "content": prompt_text}]
+            formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            response = generate(model, tokenizer, prompt=formatted, max_tokens=4096, sampler=sampler)
+            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+
+            # Extract code from markdown blocks or raw
+            code_match = re.search(r"```python\s*(.*?)```", response, re.DOTALL)
+            code = code_match.group(1).strip() if code_match else response
+
+            # Write file
+            target.write_text(code)
+            _evo_log(f"IMPLEMENT: Wrote {len(code)} bytes to {target}")
+
+            # Test it
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(SKILLS_DIR)
+            result = subprocess.run(
+                ["python3", str(target)],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+
+            del model, tokenizer  # Free GPU memory
+
+            if "PASSED" in result.stdout:
+                self.add_skill(proposal)
+                self.mark_completed(sid, "auto-implemented")
+                _evo_log(f"IMPLEMENT SUCCESS: {sid} passes tests")
+                return True
+            else:
+                target.unlink(missing_ok=True)
+                _evo_log(f"IMPLEMENT FAILED: {sid} - {(result.stdout + result.stderr)[:200]}")
+                return False
+
+        except Exception as e:
+            target.unlink(missing_ok=True)
+            _evo_log(f"IMPLEMENT ERROR: {sid} - {e}")
+            return False
+
+    def evolve(self, iterations: int = 1):
+        """Main evolution loop: propose → implement → integrate."""
+        _evo_log(f"EVOLVE START: {iterations} iterations")
+        total_added = 0
+
+        for i in range(iterations):
+            proposals = self.generate_proposals(num_proposals=3)
+            if not proposals:
+                _evo_log(f"EVOLVE ITER {i+1}: No proposals generated")
+                continue
+
+            for p in proposals:
+                ok = self.auto_implement(p)
+                if ok:
+                    total_added += 1
+                    _evo_log(f"EVOLVE ITER {i+1}: Added {p['id']}")
+
+        self._load_graph()
+        _evo_log(f"EVOLVE END: Added {total_added} skills across {iterations} iterations")
+        return total_added
 
     # ── Goal building ─────────────────────────────────────────────────────
 
@@ -315,64 +611,84 @@ PROPOSE NEW SKILLS to skills/tree_proposals.txt: SKILL: name | FILE: x.py | TIER
         def add(p, full=True):
             nonlocal used
             f = Path(p)
-            if not f.exists(): return
-            c = f.read_text()
-            est = len(c) // 4
+            if not f.exists():
+                return
+            content = f.read_text()
+            est = len(content) // 4
             if not full or used + est > budget:
-                loc = len(c.splitlines())
-                cls = [l.split("(")[0].replace("class ","").strip() for l in c.splitlines() if l.strip().startswith("class ")]
-                fns = [l.split("(")[0].replace("def ","").strip() for l in c.splitlines() if l.strip().startswith("def ")]
+                loc = len(content.splitlines())
+                cls = [l.split("(")[0].replace("class ", "").strip() for l in content.splitlines() if l.strip().startswith("class ")]
+                fns = [l.split("(")[0].replace("def ", "").strip() for l in content.splitlines() if l.strip().startswith("def ")]
                 s = f"\n{p} ({loc}L)" + (f" Classes:{','.join(cls[:6])}" if cls else "") + (f" Funcs:{','.join(fns[:8])}" if fns else "")
-                lines.append(s); used += len(s)//4
+                lines.append(s)
+                used += len(s) // 4
             else:
-                lines.append(f"\n--- {p} ---\n{c}"); used += est
+                lines.append(f"\n--- {p} ---\n{content}")
+                used += est
         add("src/config.py")
         add("src/memory.py")
         for f in sorted(SKILLS_DIR.glob("*.py")):
-            if not f.name.startswith("_"): add(f"skills/{f.name}")
+            if not f.name.startswith("_"):
+                add(f"skills/{f.name}")
         add("src/agent.py", full=False)
         return "\n".join(lines)
 
     def _tree_text(self):
         lines = []
-        tnames = {1:"FOUNDATION",2:"INTELLIGENCE",3:"INTEGRATION",4:"OPTIMIZATION"}
+        tnames = {1: "FOUNDATION", 2: "INTELLIGENCE", 3: "INTEGRATION", 4: "OPTIMIZATION"}
         with self._conn() as c:
-            for t in [1,2,3,4]:
-                lines.append(f"\nTIER {t}: {tnames.get(t,'?')}")
-                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC",(t,)):
-                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+            for t in [1, 2, 3, 4]:
+                lines.append(f"\nTIER {t}: {tnames.get(t, '?')}")
+                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC", (t,)):
+                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?", (r["id"],))]
                     deps = f" (needs:{','.join(ps)})" if ps else ""
-                    lines.append(f"  [{r['status'].upper()}] {r['name']} -> {r['file']} (impact:{r['current_impact']:.1f}){deps}")
+                    lines.append(f"  [{r['status'].upper()}] {r['name']} -> {r['file']} (impact:{r['current_impact']:.1f} domain:{r['domain']}){deps}")
         return "\n".join(lines)
 
-    # ── Display ───────────────────────────────────────────────────────────
+    # ── Visualization ─────────────────────────────────────────────────────
+
+    def export_to_dot(self) -> str:
+        """Export graph as DOT format for Graphviz."""
+        lines = ["digraph SkillTree {", '  rankdir=TB;', '  node [shape=box, style=filled];']
+        colors = {"completed": "#90EE90", "locked": "#D3D3D3", "failing": "#FFB6C1"}
+        with self._conn() as c:
+            for r in c.execute("SELECT * FROM skills"):
+                color = colors.get(r["status"], "#FFFACD")
+                lines.append(f'  {r["id"]} [label="{r["name"]}\\nT{r["tier"]} | {r["current_impact"]:.1f}", fillcolor="{color}"];')
+            for r in c.execute("SELECT * FROM prereqs"):
+                lines.append(f'  {r["prereq_id"]} -> {r["skill_id"]};')
+        lines.append("}")
+        return "\n".join(lines)
 
     def print_tree(self):
-        tnames = {1:"FOUNDATION",2:"INTELLIGENCE",3:"INTEGRATION",4:"OPTIMIZATION"}
+        tnames = {1: "FOUNDATION", 2: "INTELLIGENCE", 3: "INTEGRATION", 4: "OPTIMIZATION"}
         with self._conn() as c:
-            for t in [1,2,3,4]:
-                print(f"\n{'─'*40}\nTIER {t}: {tnames.get(t,'?')}\n{'─'*40}")
-                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC",(t,)):
+            for t in [1, 2, 3, 4]:
+                print(f"\n{'─'*40}\nTIER {t}: {tnames.get(t, '?')}\n{'─'*40}")
+                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC", (t,)):
                     s = r["status"]
-                    icon = {"completed":"✅","failing":"❌"}.get(s, "⬜" if self.is_unlocked(r["id"]) else "🔒")
-                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+                    icon = {"completed": "✅", "failing": "❌"}.get(s, "⬜" if self.is_unlocked(r["id"]) else "🔒")
+                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?", (r["id"],))]
                     deps = f" (needs:{','.join(ps)})" if ps else ""
-                    lv = f" Lv{r['level']}" if r['level']>1 else ""
-                    fl = f" [{r['fail_count']}F]" if r['fail_count']>0 else ""
-                    print(f"  {icon} [{r['current_impact']:.1f}] {r['name']} -> {r['file']}{lv}{fl}{deps}")
+                    lv = f" Lv{r['level']}" if r['level'] > 1 else ""
+                    fl = f" [{r['fail_count']}F]" if r['fail_count'] > 0 else ""
+                    dom = f" [{r['domain']}]" if r['domain'] != 'general' else ""
+                    pulls = f" pulls:{r['pull_count']}" if r['pull_count'] > 0 else ""
+                    print(f"  {icon} [{r['current_impact']:.1f}] {r['name']}{dom}{lv}{fl}{pulls}{deps}")
         nxt = self.get_next_skill()
         print(f"\n→ NEXT: {nxt['name']} ({nxt['file']})" if nxt else "\n→ ALL COMPLETE!")
         w = self.get_system_weaknesses()
-        if w != "System is healthy": print(f"\n⚠ {w}")
+        if w != "System is healthy":
+            print(f"\n⚠ {w}")
 
     def get_state(self):
         with self._conn() as c:
             skills = []
             for r in c.execute("SELECT * FROM skills ORDER BY tier, current_impact DESC"):
-                ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+                ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?", (r["id"],))]
                 skills.append({**dict(r), "prereqs": ps, "unlocked": self.is_unlocked(r["id"])})
             return {"skills": skills, "total": len(skills),
-                    "completed": sum(1 for s in skills if s["status"]=="completed"),
+                    "completed": sum(1 for s in skills if s["status"] == "completed"),
                     "next": self.get_next_skill(), "weaknesses": self.get_system_weaknesses()}
 
 
