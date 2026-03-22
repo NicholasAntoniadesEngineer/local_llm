@@ -551,64 +551,44 @@ Output ONLY the Python code. No explanation."""
     # ── Goal building ─────────────────────────────────────────────────────
 
     def build_goal_for_skill(self, skill):
-        tree = self._tree_text()
-        weak = self.get_system_weaknesses()
-        code = self._codebase(4000)
+        prereq_code = self._prereq_code(skill)
+        code_list = self._codebase()
         tnames = {1: "Foundation", 2: "Intelligence", 3: "Integration", 4: "Optimization"}
         pfiles = [self._field(p, "file") for p in self.graph.predecessors(skill["id"])]
         pfiles = [f for f in pfiles if f]
 
-        return f"""You are a self-improving AI agent.
-
-=== CODEBASE ===
-{code}
-
-=== SKILL TREE ===
-{tree}
-
-=== WEAKNESSES ===
-{weak}
-
-=== TASK ===
-BUILD: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')}, Impact: {skill.get('current_impact', skill.get('impact','?'))}/10)
+        return f"""BUILD: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')}, Impact: {skill.get('current_impact', skill.get('impact','?'))}/10)
 FILE: {skill['file']}
 WHY: {skill.get('description','')}
-
 SPEC: {skill.get('spec','')}
 TESTS: {skill.get('test_hint','')}
 
-IMPORTS: {chr(10).join(f'from {Path(f).stem} import *' for f in pfiles) if pfiles else '(none)'}
+PREREQ CODE (you can import from these):
+{prereq_code}
 
-RULES: Write complete code in {skill['file']}. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing.
+{code_list}
 
-PROPOSE NEW SKILLS to skills/tree_proposals.txt: SKILL: name | FILE: x.py | TIER: N | PREREQS: a,b | DESC: ... | SPEC: ..."""
+RULES: Write complete code in {skill['file']}. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing."""
 
-    def _codebase(self, budget=4000):
-        lines, used = [], 0
-        def add(p, full=True):
-            nonlocal used
-            f = Path(p)
-            if not f.exists():
-                return
-            content = f.read_text()
-            est = len(content) // 4
-            if not full or used + est > budget:
-                loc = len(content.splitlines())
-                cls = [l.split("(")[0].replace("class ", "").strip() for l in content.splitlines() if l.strip().startswith("class ")]
-                fns = [l.split("(")[0].replace("def ", "").strip() for l in content.splitlines() if l.strip().startswith("def ")]
-                s = f"\n{p} ({loc}L)" + (f" Classes:{','.join(cls[:6])}" if cls else "") + (f" Funcs:{','.join(fns[:8])}" if fns else "")
-                lines.append(s)
-                used += len(s) // 4
-            else:
-                lines.append(f"\n--- {p} ---\n{content}")
-                used += est
-        add("src/config.py")
-        add("src/memory.py")
+    def _codebase(self, budget=1500):
+        """Minimal codebase context - only prereq files get full content."""
+        lines = []
+        # Just list what exists, don't dump contents
         for f in sorted(SKILLS_DIR.glob("*.py")):
             if not f.name.startswith("_"):
-                add(f"skills/{f.name}")
-        add("src/agent.py", full=False)
+                loc = len(f.read_text().splitlines())
+                lines.append(f"  skills/{f.name} ({loc}L)")
+        lines.insert(0, "Existing skills:")
         return "\n".join(lines)
+
+    def _prereq_code(self, skill):
+        """Only load the actual prerequisite files the skill needs to import."""
+        parts = []
+        for pid in self.graph.predecessors(skill["id"]):
+            f = SKILLS_DIR / self._field(pid, "file")
+            if f.exists():
+                parts.append(f"--- {f.name} ---\n{f.read_text()}")
+        return "\n".join(parts) if parts else "(no prereqs)"
 
     def _tree_text(self):
         lines = []
