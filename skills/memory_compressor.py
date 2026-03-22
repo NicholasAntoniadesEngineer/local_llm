@@ -14,24 +14,24 @@ class CompressedSessionMemory:
     summary: str = ""
 
     @classmethod
-    def compress(cls, session_memory: 'SessionMemory', max_iterations: int = 10) -> 'CompressedSessionMemory':
-        # Keep only the last max_iterations iterations
-        recent_iterations = session_memory.iterations[-max_iterations:] if len(session_memory.iterations) > max_iterations else session_memory.iterations
+def compress(cls, session_memory: 'SessionMemory', max_iterations: int = 10) -> 'CompressedSessionMemory':
+    # Keep only the last max_iterations iterations
+    recent_iterations = session_memory.iterations[-max_iterations:] if len(session_memory.iterations) > max_iterations else session_memory.iterations
 
-        # Summarize older iterations
-        older_iterations = session_memory.iterations[:-max_iterations] if len(session_memory.iterations) > max_iterations else []
-        summary = "\n".join([f"Step {it.step}: {it.tool_used} - {it.result[:50]}..." for it in older_iterations])
+    # Summarize older iterations
+    older_iterations = session_memory.iterations[:-max_iterations] if len(session_memory.iterations) > max_iterations else []
+    summary = "\n".join([f"Step {it.step}: {it.tool_used} - {it.result[:50]}..." for it in older_iterations])
 
-        return cls(
-            session_id=session_memory.session_id,
-            goal=session_memory.goal,
-            start_time=session_memory.start_time,
-            iterations=recent_iterations,
-            discoveries=session_memory.discoveries,
-            failures=session_memory.failures,
-            successes=session_memory.successes,
-            summary=summary
-        )
+    return cls(
+        session_id=session_memory.session_id,
+        goal=session_memory.goal,
+        start_time=session_memory.start_time,
+        iterations=recent_iterations,
+        discoveries=session_memory.discoveries,
+        failures=session_memory.failures,
+        successes=session_memory.successes,
+        summary=summary
+    )
 
 # Test block
 def test_compress():

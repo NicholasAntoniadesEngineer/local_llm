@@ -1,4 +1,4 @@
-"""Agent configuration for M4 Max (36GB). Max context = max RAM usage."""
+"""Agent configuration for M4 Max (36GB). Conservative GPU to prevent Metal OOM kernel panics."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,12 +39,12 @@ CONFIG = AgentConfig(
             max_tokens=4096,
             context_window=65_536,
         ),
-        # 14B with 128K context - 8GB model + ~16GB KV cache = ~24GB
-        # This FILLS the RAM productively
+        # 14B with 16K context - 8GB model + ~4GB KV cache = ~12GB
+        # Conservative to prevent Metal GPU kernel panics
         "tool_calling": ModelConfig(
             name="mlx-community/Qwen3-14B-4bit",
             max_tokens=4096,
-            context_window=32_768,
+            context_window=16_384,
         ),
     },
     max_iterations=25,  # more iterations = more KV cache = more RAM

@@ -343,7 +343,7 @@ class MLXAgent:
             self.logger.generation(
                 step=len(self._perf["step_times"]),
                 prompt_tokens=prompt_tokens, gen_tokens=gen_tokens,
-                tok_s=gen_tok_s, elapsed=elapsed,
+                tok_s=true_decode_tok_s, elapsed=elapsed,
                 response_preview=response[:200],
             )
 

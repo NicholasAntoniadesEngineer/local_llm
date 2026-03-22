@@ -25,3 +25,4 @@ failing_test.py
 missing_import.py
 syntax_error.py
 valid.py
+runs/2*/
