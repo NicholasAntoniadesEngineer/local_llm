@@ -52,3 +52,10 @@ logs/
 *.tmp
 /tmp/
 mlx_agent_env/
+
+# Agent temp files
+agent_outputs/.perf_stats.json
+agent_outputs/.stream.txt
+agent_outputs/.stream_history.txt
+agent_outputs/logs/
+agent_outputs/__pycache__/
