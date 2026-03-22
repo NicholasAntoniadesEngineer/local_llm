@@ -218,25 +218,37 @@ def validate_output(filepath: str) -> tuple[bool, str]:
 
 
 def run_cycle(cycle_num: int) -> bool:
-    """Run one self-aware improvement cycle."""
+    """Run one self-aware improvement cycle: build new OR upgrade weak."""
     history = load_history()
 
-    # Skill tree decides what to build
     tree = SkillTree()
-    tree.evolve_tree()  # Pick up any agent proposals
-    skill = tree.get_next_skill()
+    tree.evolve_tree()
 
-    if not skill:
-        print("\n🎉 ALL SKILLS COMPLETE!")
+    # Decide: build new skill or upgrade weakest existing one
+    new_skill = tree.get_next_skill()
+    weak_skill = tree.get_weakest_skill()
+    upgrading = False
+
+    if new_skill:
+        # Prioritize new skills, but upgrade every 3rd cycle if all built
+        skill = new_skill
+        goal_text = tree.build_goal_for_skill(skill)
+        action = "BUILDING"
+    elif weak_skill and weak_skill.get("quality_score", 999) < 200:
+        # No new skills to build - upgrade the weakest
+        skill = weak_skill
+        goal_text = tree.build_upgrade_goal(skill)
+        upgrading = True
+        action = f"UPGRADING (quality: {skill.get('quality_score', '?')})"
+    else:
+        print("\n🎉 ALL SKILLS COMPLETE AND HIGH QUALITY!")
         tree.print_tree()
         return True
 
-    goal_text = tree.build_goal_for_skill(skill)
-
     print(f"\n{'='*70}")
     print(f"CYCLE #{cycle_num} | {datetime.now().strftime('%H:%M:%S')}")
-    print(f"BUILDING: {skill['name']} (Tier {skill['tier']}, Impact {skill.get('current_impact', skill.get('impact','?'))}/10)")
-    print(f"FILE: {skill['file']}")
+    print(f"{action}: {skill['name']} (Tier {skill.get('tier','?')}, Impact {skill.get('current_impact', skill.get('impact','?'))}/10)")
+    print(f"FILE: {skill.get('file','?')}")
     print(f"{'='*70}")
     tree.print_tree()
     print()

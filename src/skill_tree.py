@@ -254,6 +254,62 @@ class SkillTree:
         # Embedding computed lazily (avoid loading model during seed/init)
         return sid
 
+    def get_weakest_skill(self) -> Optional[dict]:
+        """Find the weakest completed skill that needs upgrading."""
+        weakest = None
+        worst_score = float("inf")
+        for nid in self.graph.nodes:
+            if self._status(nid) != "completed":
+                continue
+            fpath = SKILLS_DIR / (self._field(nid, "file") or "")
+            if not fpath.exists():
+                continue
+            source = fpath.read_text()
+            lines = len(source.splitlines())
+            funcs = source.count("\ndef ") + source.count("\n    def ")
+            asserts = source.count("assert ")
+            # Quality score: lines + 10*asserts + 5*funcs
+            score = lines + 10 * asserts + 5 * funcs
+            if score < worst_score:
+                worst_score = score
+                weakest = {**self.graph.nodes[nid], "id": nid, "quality_score": score}
+        return weakest
+
+    def build_upgrade_goal(self, skill) -> str:
+        """Build a prompt to upgrade an existing skill to production quality."""
+        fpath = SKILLS_DIR / skill["file"]
+        current_code = fpath.read_text() if fpath.exists() else "(file missing)"
+        prereq_code = self._prereq_code(skill)
+
+        return f"""You are UPGRADING an existing module to production quality. The current version works but is weak.
+
+=== CURRENT CODE (upgrade this) ===
+{current_code}
+
+=== PROBLEMS WITH CURRENT VERSION ===
+- May have shallow implementations (1-line methods that just return constants)
+- May lack proper error handling and edge cases
+- May have weak or missing test assertions
+- May not use prereq modules effectively
+
+=== UPGRADE REQUIREMENTS ===
+1. Keep the same class name and method signatures (don't break API)
+2. Make every method substantive: real logic, not pass-through
+3. Add proper error handling for edge cases (empty input, None, invalid types)
+4. Add type hints and docstrings to all public methods
+5. Upgrade tests: at least 8 assertions testing real behavior and edge cases
+6. Use prereq modules where they add value
+
+=== AVAILABLE PREREQ APIs ===
+{prereq_code}
+
+=== IMPORT RULES ===
+- from <module_name> import <ClassName> for prereqs
+- NEVER import from src.memory, src.config, or src.agent
+- stdlib only + prereq imports
+
+Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DONE when passing."""
+
     def get_next_skill(self) -> Optional[dict]:
         """UCB1 bandit – balances high-impact skills with exploration of under-tested ones."""
         if not self.graph.nodes:
