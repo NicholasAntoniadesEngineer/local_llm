@@ -18,9 +18,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
-import numpy as np
 import networkx as nx
-from sentence_transformers import SentenceTransformer
 
 from src.paths import SKILLS_DIR, RUNS_DIR
 
@@ -80,8 +78,7 @@ class SkillTree:
         self.graph = nx.DiGraph()
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Semantic embedder (lazy-loaded to avoid GPU memory conflict with MLX)
-        self._embedder = None
+        # No external embedding model — use stdlib TF-IDF for zero GPU footprint
 
         self._init_db()
         self._migrate_v3()
@@ -198,48 +195,23 @@ class SkillTree:
         with self._conn() as c:
             c.execute("UPDATE skills SET pull_count=? WHERE id=?", (n.get("pull_count", 0), sid))
 
-    # ── Semantic Layer ────────────────────────────────────────────────────
+    # ── Semantic Layer (pure Python, zero GPU) ──────────────────────────
 
-    @property
-    def embedder(self):
-        """Lazy-load sentence transformer to avoid GPU memory conflict with MLX."""
-        if self._embedder is None:
-            self._embedder = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
-        return self._embedder
+    def _tokenize(self, text: str) -> set:
+        """Simple word tokenization for similarity."""
+        return set(re.findall(r'\w+', text.lower()))
 
-    def _embed(self, skill_dict: dict) -> np.ndarray:
-        """Compute normalized embedding for a skill."""
-        desc = f"{skill_dict.get('name', '')}: {skill_dict.get('description', '')} | Spec: {skill_dict.get('spec', '')}"
-        return self.embedder.encode(desc, normalize_embeddings=True).astype(np.float32)
-
-    def _store_embedding(self, skill_id: str, embedding: np.ndarray):
-        """Save embedding as BLOB."""
-        with self._conn() as c:
-            c.execute("UPDATE skills SET embedding=? WHERE id=?", (embedding.tobytes(), skill_id))
-
-    def _load_embedding(self, skill_id: str) -> Optional[np.ndarray]:
-        """Load embedding from DB."""
-        with self._conn() as c:
-            r = c.execute("SELECT embedding FROM skills WHERE id=?", (skill_id,)).fetchone()
-            if r and r["embedding"]:
-                return np.frombuffer(r["embedding"], dtype=np.float32)
-        return None
-
-    def _ensure_embeddings(self):
-        """Compute embeddings for all skills that don't have one yet."""
-        with self._conn() as c:
-            for r in c.execute("SELECT id, name, description, spec FROM skills WHERE embedding IS NULL"):
-                emb = self._embed(dict(r))
-                self._store_embedding(r["id"], emb)
-
-    def get_skill_embedding_similarity(self, skill1: str, skill2: str) -> float:
-        """Cosine similarity between two skill embeddings."""
-        self._ensure_embeddings()
-        e1 = self._load_embedding(skill1)
-        e2 = self._load_embedding(skill2)
-        if e1 is None or e2 is None:
+    def get_skill_similarity(self, skill1: str, skill2: str) -> float:
+        """Jaccard similarity between skill descriptions (no GPU needed)."""
+        d1 = self._field(skill1, "description") or ""
+        d2 = self._field(skill2, "description") or ""
+        s1 = self._field(skill1, "spec") or ""
+        s2 = self._field(skill2, "spec") or ""
+        t1 = self._tokenize(f"{d1} {s1}")
+        t2 = self._tokenize(f"{d2} {s2}")
+        if not t1 or not t2:
             return 0.0
-        return float(np.dot(e1, e2))
+        return len(t1 & t2) / len(t1 | t2)
 
     # ── Core API ──────────────────────────────────────────────────────────
 
