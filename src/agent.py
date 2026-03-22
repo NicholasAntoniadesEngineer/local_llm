@@ -660,8 +660,8 @@ class MLXAgent:
                 except Exception:
                     pass
 
-            # Check for real-time user input
-            _input_file = Path("/tmp/agent_input.txt")
+            # Check for real-time user input (inside current run dir)
+            _input_file = self.logger.run_dir / "user_input.txt"
             try:
                 if _input_file.exists() and _input_file.stat().st_size > 0:
                     user_hint = _input_file.read_text().strip()

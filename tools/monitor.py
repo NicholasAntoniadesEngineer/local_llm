@@ -423,39 +423,53 @@ def build_dashboard() -> Layout:
     return layout
 
 
-if __name__ == "__main__":
-    console = Console()
-    console.print(
-        "[bold green]Starting FULL REALTIME MLX + SkillTree v3 Monitor...[/]\n"
-        "• Live Agent Logs panel (updates every 2s)\n"
-        "• Token Performance now pulls from real events.jsonl\n"
-        "• Ctrl+C to quit\n"
-    )
+LAST_SENT = ""
 
-    console.print("[dim]Send hints to the running agent:[/]")
-    console.print("[bold]  echo 'your message' > /tmp/agent_input.txt[/]\n")
 
-    with Live(build_dashboard(), refresh_per_second=0.5, screen=True) as live:
+def _get_input_file() -> Path:
+    """Get user_input.txt inside the current run directory."""
+    rd = get_current_run_dir()
+    if rd:
+        return rd / "user_input.txt"
+    return Path("/tmp/agent_input.txt")
+
+
+def input_thread():
+    """Background thread reading stdin for user messages to the agent."""
+    global LAST_SENT
+    import sys, select
+    while True:
         try:
+            if select.select([sys.stdin], [], [], 0.5)[0]:
+                line = sys.stdin.readline().strip()
+                if line:
+                    _get_input_file().write_text(line)
+                    LAST_SENT = line
+        except Exception:
+            break
+
+
+def build_input_bar():
+    """Bottom bar showing input status."""
+    if LAST_SENT:
+        return Text(f"  Last sent: {LAST_SENT[:80]}  |  Type below to send to agent", style="bold cyan")
+    return Text("  Type a message below and press Enter to send to the running agent", style="bold cyan")
+
+
+if __name__ == "__main__":
+    import threading
+
+    console = Console()
+
+    # Start input reader thread
+    t = threading.Thread(target=input_thread, daemon=True)
+    t.start()
+
+    # Use screen=False so stdin still works, and add input bar to layout
+    try:
+        with Live(build_dashboard(), refresh_per_second=0.5, screen=False, console=console) as live:
             while True:
                 live.update(build_dashboard())
                 time.sleep(2)
-        except KeyboardInterrupt:
-            # On exit, offer input prompt
-            console.print("\n[bold yellow]Monitor paused.[/]")
-            try:
-                hint = console.input("[bold cyan]Send message to agent (or Enter to quit): [/]")
-                if hint.strip():
-                    Path("/tmp/agent_input.txt").write_text(hint.strip())
-                    console.print(f"[green]Sent: {hint.strip()}[/]")
-                    # Resume monitoring
-                    with Live(build_dashboard(), refresh_per_second=0.5, screen=True) as live2:
-                        try:
-                            while True:
-                                live2.update(build_dashboard())
-                                time.sleep(2)
-                        except KeyboardInterrupt:
-                            pass
-            except (EOFError, KeyboardInterrupt):
-                pass
-            console.print("\n[bold yellow]Monitor stopped.[/]")
+    except KeyboardInterrupt:
+        console.print("\n[bold yellow]Monitor stopped.[/]")
