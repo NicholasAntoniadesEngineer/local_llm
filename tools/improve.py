@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from src.agent import MLXAgent
 from src.logger import AgentLogger
-from src.skill_tree import get_next_skill, get_system_state, build_goal_for_skill, print_tree
+from src.skill_tree import SkillTree
 
 
 HISTORY_FILE = Path("./runs/history.json")
@@ -217,31 +217,31 @@ def run_cycle(cycle_num: int) -> bool:
     history = load_history()
 
     # Skill tree decides what to build
-    state = get_system_state()
-    skill = get_next_skill()
+    tree = SkillTree()
+    tree.evolve_tree()  # Pick up any agent proposals
+    skill = tree.get_next_skill()
 
     if not skill:
-        print("\n🎉 ALL SKILLS COMPLETE! The agent has reached full capability.")
-        print_tree()
+        print("\n🎉 ALL SKILLS COMPLETE!")
+        tree.print_tree()
         return True
 
-    goal_text = build_goal_for_skill(skill, state)
+    goal_text = tree.build_goal_for_skill(skill)
 
     print(f"\n{'='*70}")
     print(f"CYCLE #{cycle_num} | {datetime.now().strftime('%H:%M:%S')}")
-    print(f"BUILDING: {skill.name} (Tier {skill.tier}, Impact {skill.impact}/10)")
-    print(f"FILE: {skill.file}")
+    print(f"BUILDING: {skill['name']} (Tier {skill['tier']}, Impact {skill.get('current_impact', skill.get('impact','?'))}/10)")
+    print(f"FILE: {skill['file']}")
     print(f"{'='*70}")
-    print_tree()
+    tree.print_tree()
     print()
 
     output_dir = Path("./skills")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run the agent with skill-tree goal
     try:
         model = os.environ.get("AGENT_MODEL", "tool_calling")
-        agent = MLXAgent(config_model_name=model, goal=f"Build: {skill.name}")
+        agent = MLXAgent(config_model_name=model, goal=f"Build: {skill['name']}")
         agent.run_loop(goal_text)
     except KeyboardInterrupt:
         raise
@@ -256,8 +256,8 @@ def run_cycle(cycle_num: int) -> bool:
         return False
 
     # Check the skill's target file
-    target_file = str(output_dir / skill.file)
-    target_name = skill.file
+    target_file = str(output_dir / skill["file"])
+    target_name = skill["file"]
 
     if not Path(target_file).exists():
         print("\n❌ No output file produced")
@@ -281,6 +281,7 @@ def run_cycle(cycle_num: int) -> bool:
 
     if ok:
         print(f"✅ PASSED: {target_name} - {msg}")
+        tree.mark_completed(skill["id"], msg)
         history["cycles"].append({
             "cycle": cycle_num, "target": target_name, "passed": True,
             "reason": msg[:100], "timestamp": datetime.now().isoformat(),
@@ -288,6 +289,7 @@ def run_cycle(cycle_num: int) -> bool:
         history["total_passed"] += 1
     else:
         print(f"❌ FAILED: {target_name} - {msg}")
+        tree.mark_failed(skill["id"], msg)
         if Path(target_file).exists():
             Path(target_file).unlink()
             print(f"🗑️  Deleted: {target_name}")

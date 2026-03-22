@@ -342,21 +342,22 @@ def build_dashboard() -> Layout:
     tree_table.add_column("Size", width=8)
 
     try:
-        from src.skill_tree import SKILLS, get_system_state as _gs
-        _st = _gs()
-        for sid, sk in sorted(SKILLS.items(), key=lambda x: (x[1].tier, -x[1].impact)):
-            fpath = Path(f"./skills/{sk.file}")
-            if sid in _st["passing"]:
+        from src.skill_tree import SkillTree
+        _tree = SkillTree()
+        state = _tree.get_state()
+        for sk in state["skills"]:
+            fpath = Path(f"./skills/{sk['file']}")
+            s = sk["status"]
+            if s == "completed":
                 st = "[green]DONE[/]"
-                sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
-            elif sid in _st["failing"]:
+            elif s == "failing":
                 st = "[red]FAIL[/]"
-                sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
+            elif sk["unlocked"]:
+                st = "[yellow]NEXT[/]"
             else:
-                prereqs_met = all(p in _st["passing"] for p in sk.prereqs)
-                st = "[yellow]NEXT[/]" if prereqs_met else "[dim]LOCK[/]"
-                sz = ""
-            tree_table.add_row(f"T{sk.tier} {sk.name}", st, sz)
+                st = "[dim]LOCK[/]"
+            sz = f"{fpath.stat().st_size:,}B" if fpath.exists() else ""
+            tree_table.add_row(f"T{sk['tier']} {sk['name']}", st, sz)
     except Exception as e:
         tree_table.add_row(f"Error: {e}", "", "")
 

@@ -1,540 +1,380 @@
 """
-Skill Tree: A directed graph of agent capabilities.
+SkillTree v2: Self-learning, self-growing agent brain.
 
-Each skill has:
-- Prerequisites (what must be built first)
-- Priority tier (foundation → intelligence → integration → optimization)
-- A concrete spec (exactly what to build, what to test)
-- Impact score (how much it improves the system)
-
-The tree is the SINGLE SOURCE OF TRUTH for what the agent builds next.
-It picks the highest-impact unblocked skill automatically.
+Backed by SQLite for persistence + networkx DiGraph for DAG operations.
+The agent can propose new skills, and impact scores evolve based on results.
 """
 
+import json
 import os
+import sqlite3
 import subprocess
+import heapq
 from pathlib import Path
-from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional
 
+import networkx as nx
 
-@dataclass
-class Skill:
-    """One buildable capability."""
-    id: str
-    name: str
-    file: str                           # output filename
-    tier: int                           # 1=foundation, 2=intelligence, 3=integration, 4=optimization
-    impact: int                         # 1-10, higher = more important
-    prereqs: list[str] = field(default_factory=list)  # skill IDs that must be PASSING first
-    description: str = ""               # what this does for the system
-    spec: str = ""                      # EXACT instructions for the LLM
-    test_hint: str = ""                 # what the test should verify
+from src.paths import SKILLS_DIR, RUNS_DIR
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# THE SKILL TREE
+# SEED DATA: Initial skills (used for first-run migration only)
 # ═══════════════════════════════════════════════════════════════════════════
 
-SKILLS = {
-
-    # ── TIER 1: FOUNDATION (no prereqs) ───────────────────────────────────
-
-    "search_cache": Skill(
-        id="search_cache",
-        name="Search Result Cache",
-        file="search_cache.py",
-        tier=1, impact=7,
-        description="Cache web search results with TTL to avoid duplicate API calls",
-        spec=(
-            "Class SearchCache with: get(key)->Optional[str], "
-            "set(key, value, ttl_seconds=300), cleanup() removes expired, "
-            "stats() returns dict with hit_count, miss_count, size. "
-            "Use time.time() for TTL tracking."
-        ),
-        test_hint="Set 3 values, verify hits, verify miss on unknown key, verify expiry after TTL",
-    ),
-
-    "metrics": Skill(
-        id="metrics",
-        name="Performance Metrics",
-        file="metrics.py",
-        tier=1, impact=6,
-        description="Track tool calls, success rates, timing, token counts per session",
-        spec=(
-            "Class AgentMetrics with: record_step(tool, success, duration, tokens=0), "
-            "summary()->dict with tool_counts/success_rate/avg_time/total_tokens, "
-            "report()->str formatted summary. Track per-tool breakdowns."
-        ),
-        test_hint="Simulate 20 steps across 4 tools, verify counts and rates are correct",
-    ),
-
-    "memory_compressor": Skill(
-        id="memory_compressor",
-        name="Memory Compression",
-        file="memory_compressor.py",
-        tier=1, impact=6,
-        description="Compress old session iterations to keep memory lean",
-        spec=(
-            "Function compress_session(iterations: list, keep_recent=10) -> tuple[list, str]. "
-            "Keep the most recent 'keep_recent' iterations unchanged. "
-            "Summarize older ones into a single string: count by tool, success rate, key findings. "
-            "Return (recent_iterations, summary_string)."
-        ),
-        test_hint="Create 50 fake iterations, compress, verify <=10 remain plus summary string",
-    ),
-
-    "error_recovery": Skill(
-        id="error_recovery",
-        name="Error Recovery",
-        file="error_recovery.py",
-        tier=1, impact=8,
-        description="Retry failed operations with exponential backoff and error classification",
-        spec=(
-            "Class ErrorRecovery with: classify_error(error_str)->str returning one of "
-            "'timeout','import','syntax','network','permission','unknown'. "
-            "suggest_fix(error_type)->str returning actionable advice. "
-            "should_retry(error_type, attempt_num)->bool (max 3 retries, no retry on syntax). "
-            "backoff_seconds(attempt_num)->float (exponential: 1, 2, 4)."
-        ),
-        test_hint="Test each error type classification, verify retry logic, verify backoff times",
-    ),
-
-    "code_validator": Skill(
-        id="code_validator",
-        name="Code Validator",
-        file="code_validator.py",
-        tier=1, impact=9,
-        description="Validate generated Python code: syntax, imports, test execution",
-        spec=(
-            "Class CodeValidator with: check_syntax(code_str)->tuple[bool, str], "
-            "check_imports(code_str)->list[str] returning missing modules, "
-            "run_tests(file_path)->tuple[bool, str] executing the file and checking output, "
-            "validate_all(file_path)->dict with syntax_ok, imports_ok, tests_ok, issues list."
-        ),
-        test_hint="Test with valid code, code with syntax error, code with missing import, code with failing test",
-    ),
-
-    # ── TIER 2: INTELLIGENCE (require foundation) ─────────────────────────
-
-    "loop_detector": Skill(
-        id="loop_detector",
-        name="Loop Detector",
-        file="loop_detector.py",
-        tier=2, impact=8,
-        prereqs=["metrics"],
-        description="Detect when agent is stuck repeating the same action with similar results",
-        spec=(
-            "Class LoopDetector with: record(tool, args_str, result_str), "
-            "is_stuck()->bool True if last 3 calls same tool AND results >80% similar, "
-            "suggest_escape(current_tool)->str suggesting different tool/approach, "
-            "similarity(a,b)->float using difflib.SequenceMatcher. "
-            "Track a sliding window of last 10 actions."
-        ),
-        test_hint="Test: 3 identical calls=stuck, 3 different calls=not stuck, similar but not identical results",
-    ),
-
-    "confidence_scorer": Skill(
-        id="confidence_scorer",
-        name="Confidence Scorer",
-        file="confidence_scorer.py",
-        tier=2, impact=9,
-        prereqs=["metrics", "error_recovery"],
-        description="Score agent confidence: should it act, research more, or ask for help?",
-        spec=(
-            "Class ConfidenceScorer with: "
-            "score_knowledge(discoveries_count, relevant_keywords)->float 0-1, "
-            "score_capability(tool_success_rate, errors_count)->float 0-1, "
-            "score_progress(steps_taken, max_steps, files_written)->float 0-1, "
-            "should_act(knowledge, capability, progress)->str returning 'research','code','save','abort', "
-            "overall(knowledge, capability, progress)->float 0-1 combined score."
-        ),
-        test_hint="Test: low knowledge=research, high everything=save, many errors=abort, balanced=code",
-    ),
-
-    "result_evaluator": Skill(
-        id="result_evaluator",
-        name="Result Evaluator",
-        file="result_evaluator.py",
-        tier=2, impact=7,
-        prereqs=["search_cache"],
-        description="Evaluate quality of tool results - are they useful or junk?",
-        spec=(
-            "Class ResultEvaluator with: "
-            "score_search_result(query, title, snippet)->float 0-1 relevance, "
-            "score_code_output(code, output, has_error)->float 0-1 quality, "
-            "is_duplicate(new_result, previous_results)->bool, "
-            "summarize_quality(scores_list)->dict with avg/min/max/assessment."
-        ),
-        test_hint="Test: relevant search=high score, junk=low, working code=high, error output=low, exact duplicate detection",
-    ),
-
-    "task_planner": Skill(
-        id="task_planner",
-        name="Task Planner",
-        file="task_planner.py",
-        tier=2, impact=8,
-        prereqs=["error_recovery"],
-        description="Decompose complex goals into ordered subtasks",
-        spec=(
-            "Class TaskPlanner with: "
-            "decompose(goal_str)->list[dict] each with 'task','tool','priority','depends_on', "
-            "next_task(completed_tasks)->dict or None, "
-            "is_complete(completed_tasks, all_tasks)->bool, "
-            "replan(failed_task, error)->list[dict] alternative approach. "
-            "Handle common patterns: read->analyze->code->test->save."
-        ),
-        test_hint="Test: decompose a coding goal into 5+ steps, verify ordering, verify replan on failure",
-    ),
-
-    # ── TIER 3: INTEGRATION (require intelligence) ────────────────────────
-
-    "smart_router": Skill(
-        id="smart_router",
-        name="Smart Tool Router",
-        file="smart_router.py",
-        tier=3, impact=9,
-        prereqs=["confidence_scorer", "loop_detector", "task_planner"],
-        description="Given current state, pick the optimal next tool and arguments",
-        spec=(
-            "Class SmartRouter with: "
-            "pick_tool(phase, confidence, loop_status, task_plan)->dict with 'tool','args','reason', "
-            "should_change_phase(current_phase, confidence, steps_in_phase)->tuple[bool, str], "
-            "format_tool_prompt(tool, args, context)->str generating the tool call string. "
-            "Integrate confidence scoring, loop detection, and task planning."
-        ),
-        test_hint="Test: research phase+low confidence=web_search, code phase+loop=phase change, high confidence+code done=save",
-    ),
-
-    "self_evaluator": Skill(
-        id="self_evaluator",
-        name="Self Evaluator",
-        file="self_evaluator.py",
-        tier=3, impact=10,
-        prereqs=["code_validator", "result_evaluator", "metrics"],
-        description="Agent evaluates its own output quality before saving",
-        spec=(
-            "Class SelfEvaluator with: "
-            "evaluate_file(file_path)->dict with scores for: "
-            "syntax(0-1), has_tests(bool), tests_pass(bool), "
-            "code_size(bytes), docstrings(bool), type_hints(bool), "
-            "overall_quality(0-1), recommendation('keep','fix','discard'). "
-            "Use CodeValidator for syntax, run tests, check for docstrings and type hints."
-        ),
-        test_hint="Test with: good quality file=keep, syntax error=discard, no tests=fix, tiny placeholder=discard",
-    ),
-
-    # ── TIER 4: OPTIMIZATION (require integration) ────────────────────────
-
-    "orchestrator": Skill(
-        id="orchestrator",
-        name="Agent Orchestrator",
-        file="orchestrator.py",
-        tier=4, impact=10,
-        prereqs=["smart_router", "self_evaluator"],
-        description="Master controller that wires all modules together into a smarter agent loop",
-        spec=(
-            "Class Orchestrator with: "
-            "plan_cycle(goal, codebase_state)->list of planned steps, "
-            "decide_next(current_state, history)->dict with tool/args/reason, "
-            "evaluate_progress(steps_done, goal)->dict with completion_pct/quality/should_continue, "
-            "post_mortem(run_log)->dict analyzing what worked, what didn't, what to try next time. "
-            "This is the brain that coordinates all other modules."
-        ),
-        test_hint="Test: given a goal and empty state, produces sensible plan. Given completed state, recommends save. Given loop state, recommends escape.",
-    ),
-
-    "strategy_learner": Skill(
-        id="strategy_learner",
-        name="Strategy Learner",
-        file="strategy_learner.py",
-        tier=4, impact=10,
-        prereqs=["orchestrator", "self_evaluator"],
-        description="Learn from past runs: what strategies work for what kinds of tasks",
-        spec=(
-            "Class StrategyLearner with: "
-            "record_outcome(task_type, strategy_used, success, quality_score), "
-            "best_strategy(task_type)->str the approach with highest historical success, "
-            "avoid_strategy(task_type)->str the approach with lowest success, "
-            "success_rate_by_strategy()->dict mapping strategy->rate, "
-            "recommend(task_type, available_strategies)->str picking the best option. "
-            "Persist data to a JSON file."
-        ),
-        test_hint="Record 20 outcomes across 3 task types, verify best/worst strategies match expected, verify persistence to disk",
-    ),
-}
+SEED_SKILLS = [
+    {"id": "search_cache", "name": "Search Result Cache", "file": "search_cache.py", "tier": 1, "impact": 7, "prereqs": [],
+     "description": "Cache web search results with TTL", "spec": "Class SearchCache with get/set/cleanup/stats.", "test_hint": "Set values, verify hits/misses, verify expiry"},
+    {"id": "metrics", "name": "Performance Metrics", "file": "metrics.py", "tier": 1, "impact": 6, "prereqs": [],
+     "description": "Track tool calls, success rates, timing", "spec": "Class AgentMetrics with record_step/summary/report.", "test_hint": "Simulate 20 steps, verify counts"},
+    {"id": "memory_compressor", "name": "Memory Compression", "file": "memory_compressor.py", "tier": 1, "impact": 6, "prereqs": [],
+     "description": "Compress old session iterations", "spec": "Function compress_session(iterations, keep_recent=10).", "test_hint": "50 iterations compressed to <=10"},
+    {"id": "error_recovery", "name": "Error Recovery", "file": "error_recovery.py", "tier": 1, "impact": 8, "prereqs": [],
+     "description": "Retry with backoff and error classification", "spec": "Class ErrorRecovery with classify/suggest/should_retry/backoff.", "test_hint": "Test each error type and retry logic"},
+    {"id": "code_validator", "name": "Code Validator", "file": "code_validator.py", "tier": 1, "impact": 9, "prereqs": [],
+     "description": "Validate Python: syntax, imports, tests", "spec": "Class CodeValidator with check_syntax/check_imports/run_tests/validate_all.", "test_hint": "Valid code, syntax error, missing import"},
+    {"id": "loop_detector", "name": "Loop Detector", "file": "loop_detector.py", "tier": 2, "impact": 8, "prereqs": ["metrics"],
+     "description": "Detect repeated actions with similar results", "spec": "Class LoopDetector with record/is_stuck/suggest_escape/similarity.", "test_hint": "3 identical=stuck, different=not stuck"},
+    {"id": "confidence_scorer", "name": "Confidence Scorer", "file": "confidence_scorer.py", "tier": 2, "impact": 9, "prereqs": ["metrics", "error_recovery"],
+     "description": "Score agent confidence for decisions", "spec": "Class ConfidenceScorer with knowledge/capability/progress/should_act/overall.", "test_hint": "Low=research, high=save, errors=abort"},
+    {"id": "result_evaluator", "name": "Result Evaluator", "file": "result_evaluator.py", "tier": 2, "impact": 7, "prereqs": ["search_cache"],
+     "description": "Evaluate quality of tool results", "spec": "Class ResultEvaluator with score_search/score_code/is_duplicate/summarize.", "test_hint": "Relevant=high, junk=low, duplicate detection"},
+    {"id": "task_planner", "name": "Task Planner", "file": "task_planner.py", "tier": 2, "impact": 8, "prereqs": ["error_recovery"],
+     "description": "Decompose goals into ordered subtasks", "spec": "Class TaskPlanner with decompose/next_task/is_complete/replan.", "test_hint": "Decompose into 5+ steps, verify ordering"},
+    {"id": "smart_router", "name": "Smart Tool Router", "file": "smart_router.py", "tier": 3, "impact": 9, "prereqs": ["confidence_scorer", "loop_detector", "task_planner"],
+     "description": "Pick optimal tool given current state", "spec": "Class SmartRouter with pick_tool/should_change_phase/format_tool_prompt.", "test_hint": "Low confidence=search, loop=phase change"},
+    {"id": "self_evaluator", "name": "Self Evaluator", "file": "self_evaluator.py", "tier": 3, "impact": 10, "prereqs": ["code_validator", "result_evaluator", "metrics"],
+     "description": "Evaluate own output quality before saving", "spec": "Class SelfEvaluator with evaluate_file returning scores and recommendation.", "test_hint": "Good=keep, error=discard, no tests=fix"},
+    {"id": "orchestrator", "name": "Agent Orchestrator", "file": "orchestrator.py", "tier": 4, "impact": 10, "prereqs": ["smart_router", "self_evaluator"],
+     "description": "Master controller wiring all modules", "spec": "Class Orchestrator with plan_cycle/decide_next/evaluate_progress/post_mortem.", "test_hint": "Empty state=plan, done=save, loop=escape"},
+    {"id": "strategy_learner", "name": "Strategy Learner", "file": "strategy_learner.py", "tier": 4, "impact": 10, "prereqs": ["orchestrator", "self_evaluator"],
+     "description": "Learn what strategies work for what tasks", "spec": "Class StrategyLearner with record_outcome/best_strategy/avoid_strategy/recommend.", "test_hint": "20 outcomes, verify best/worst"},
+]
 
 
-def get_system_state() -> dict:
-    """Scan what's built and what's passing."""
-    output_dir = Path("./skills")
-    state = {"passing": set(), "failing": set(), "missing": set()}
+class SkillTree:
+    """Self-learning, self-growing skill DAG."""
 
-    for skill_id, skill in SKILLS.items():
-        fpath = output_dir / skill.file
-        if not fpath.exists():
-            state["missing"].add(skill_id)
-            continue
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or str(RUNS_DIR / "skill_tree.db")
+        self.graph = nx.DiGraph()
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+        if self._count() == 0:
+            self._seed()
+        self._load_graph()
+        self._scan_completed()
 
-        # Test it
-        try:
-            env = os.environ.copy()
-            env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(output_dir.resolve())
-            result = subprocess.run(
-                ["python3", str(fpath)],
-                capture_output=True, text=True, timeout=10, env=env,
-            )
-            if "PASSED" in result.stdout:
-                state["passing"].add(skill_id)
-            else:
-                state["failing"].add(skill_id)
-        except Exception:
-            state["failing"].add(skill_id)
+    def _conn(self):
+        c = sqlite3.connect(self.db_path)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        return c
 
-    return state
+    def _init_db(self):
+        with self._conn() as c:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS skills (
+                    id TEXT PRIMARY KEY, name TEXT, file TEXT, tier INTEGER,
+                    base_impact REAL, current_impact REAL, level INTEGER DEFAULT 1,
+                    status TEXT DEFAULT 'locked', description TEXT, spec TEXT,
+                    test_hint TEXT, last_updated TEXT, fail_count INTEGER DEFAULT 0,
+                    success_count INTEGER DEFAULT 0, proposed_by TEXT DEFAULT 'system'
+                );
+                CREATE TABLE IF NOT EXISTS prereqs (
+                    skill_id TEXT, prereq_id TEXT, PRIMARY KEY (skill_id, prereq_id)
+                );
+                CREATE TABLE IF NOT EXISTS skill_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT,
+                    event TEXT, timestamp TEXT, details TEXT
+                );
+            """)
 
+    def _count(self):
+        with self._conn() as c:
+            return c.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
 
-def get_next_skill() -> Skill:
-    """Pick the highest-impact unblocked skill to build next."""
-    load_proposals()  # Merge any agent-proposed skills
-    state = get_system_state()
+    def _seed(self):
+        for s in SEED_SKILLS:
+            self.add_skill(s)
 
-    candidates = []
-    for skill_id, skill in SKILLS.items():
-        # Skip already passing
-        if skill_id in state["passing"]:
-            continue
+    def _load_graph(self):
+        self.graph.clear()
+        with self._conn() as c:
+            for r in c.execute("SELECT * FROM skills"):
+                self.graph.add_node(r["id"], **dict(r))
+            for r in c.execute("SELECT * FROM prereqs"):
+                self.graph.add_edge(r["prereq_id"], r["skill_id"])
 
-        # Check prereqs are met
-        prereqs_met = all(p in state["passing"] for p in skill.prereqs)
-        if not prereqs_met:
-            continue
-
-        # Boost priority for failing files (fix > build new)
-        priority = skill.impact * 10 + (5 if skill_id in state["failing"] else 0)
-
-        # Lower tiers first (foundation before intelligence)
-        priority += (5 - skill.tier) * 20
-
-        candidates.append((priority, skill))
-
-    if not candidates:
-        return None
-
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
-
-
-def get_full_codebase_dump(token_budget: int = 4000) -> str:
-    """Dump codebase into context, staying within token budget.
-
-    Priority: skills (what we're building on) > config/memory > agent.py (large)
-    Agent.py is summarized since it's 600+ lines and the agent doesn't modify it.
-    """
-    lines = []
-    used_tokens = 0
-
-    def add_file(path: str, full: bool = True):
-        nonlocal used_tokens
-        f = Path(path)
-        if not f.exists():
-            return
-        content = f.read_text()
-        est_tokens = len(content) // 4
-        if not full or (used_tokens + est_tokens > token_budget):
-            # Summary only
-            loc = len(content.splitlines())
-            classes = [l.strip().split("(")[0].replace("class ", "") for l in content.splitlines() if l.strip().startswith("class ")]
-            funcs = [l.strip().split("(")[0].replace("def ", "") for l in content.splitlines() if l.strip().startswith("def ")]
-            summary = f"\nFILE: {path} ({loc} lines) [SUMMARY - too large for full context]"
-            summary += f"\n  Classes: {', '.join(classes[:10])}" if classes else ""
-            summary += f"\n  Functions: {', '.join(funcs[:15])}" if funcs else ""
-            lines.append(summary)
-            used_tokens += len(summary) // 4
-        else:
-            lines.append(f"\nFILE: {path} ({len(content.splitlines())} lines)")
-            lines.append(content)
-            used_tokens += est_tokens
-
-    # Priority 1: config + memory (small, essential)
-    add_file("config.py", full=True)
-    add_file("memory.py", full=True)
-
-    # Priority 2: all agent outputs (what we're building on)
-    output_dir = Path("./skills")
-    if output_dir.exists():
-        for f in sorted(output_dir.glob("*.py")):
-            if f.name.startswith("."):
+    def _scan_completed(self):
+        for nid in self.graph.nodes:
+            n = self.graph.nodes[nid]
+            if n.get("status") == "completed":
                 continue
-            add_file(f"skills/{f.name}", full=True)
-
-    # Priority 3: agent.py (large - summary only to save tokens)
-    add_file("agent.py", full=False)
-
-    # Priority 4: other core files if budget remains
-    for fname in ["logger.py", "skill_tree.py", "improve.py"]:
-        add_file(fname, full=False)
-
-    lines.insert(0, f"[Codebase: ~{used_tokens} tokens loaded, {token_budget} budget]")
-    return "\n".join(lines)
-
-
-def get_full_codebase_summary() -> str:
-    """Short summary for logging/display (not for agent context)."""
-    lines = []
-    for f in sorted(Path(".").glob("*.py")):
-        try:
-            content = f.read_text()
-            loc = len(content.splitlines())
-            lines.append(f"  {f.name} ({loc} lines)")
-        except Exception:
-            pass
-    output_dir = Path("./skills")
-    if output_dir.exists():
-        for f in sorted(output_dir.glob("*.py")):
-            if f.name.startswith("."):
+            fpath = SKILLS_DIR / (self._field(nid, "file") or "")
+            if not fpath.exists():
                 continue
-            lines.append(f"  skills/{f.name}")
-    return "\n".join(lines)
+            try:
+                env = os.environ.copy()
+                env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(SKILLS_DIR)
+                r = subprocess.run(["python3", str(fpath)], capture_output=True, text=True, timeout=10, env=env)
+                if "PASSED" in r.stdout:
+                    self.mark_completed(nid, "auto-detected")
+            except Exception:
+                pass
 
+    def _log(self, skill_id, event, details=""):
+        with self._conn() as c:
+            c.execute("INSERT INTO skill_history (skill_id, event, timestamp, details) VALUES (?,?,?,?)",
+                      (skill_id, event, datetime.now().isoformat(), details))
 
-def get_tree_as_text() -> str:
-    """Render the full skill tree as text for the agent to see."""
-    state = get_system_state()
-    tier_names = {1: "FOUNDATION", 2: "INTELLIGENCE", 3: "INTEGRATION", 4: "OPTIMIZATION"}
-    lines = []
+    def _field(self, sid, field):
+        with self._conn() as c:
+            r = c.execute(f"SELECT [{field}] FROM skills WHERE id=?", (sid,)).fetchone()
+            return r[field] if r else None
 
-    for tier in [1, 2, 3, 4]:
-        lines.append(f"\nTIER {tier}: {tier_names[tier]}")
-        for sid, skill in SKILLS.items():
-            if skill.tier != tier:
+    def _status(self, sid):
+        return self._field(sid, "status") or "locked"
+
+    def _skill_dict(self, sid):
+        with self._conn() as c:
+            r = c.execute("SELECT * FROM skills WHERE id=?", (sid,)).fetchone()
+            if not r: return None
+            prereqs = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?", (sid,))]
+            return {**dict(r), "prereqs": prereqs}
+
+    # ── Core API ──────────────────────────────────────────────────────────
+
+    def add_skill(self, skill):
+        sid, prereqs = skill["id"], skill.get("prereqs", [])
+        g = self.graph.copy()
+        g.add_node(sid)
+        for p in prereqs:
+            g.add_edge(p, sid)
+        if not nx.is_directed_acyclic_graph(g):
+            raise ValueError(f"Cycle detected adding {sid}")
+
+        with self._conn() as c:
+            c.execute("""INSERT OR REPLACE INTO skills
+                (id,name,file,tier,base_impact,current_impact,status,description,spec,test_hint,last_updated,proposed_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (sid, skill["name"], skill["file"], skill["tier"], skill["impact"], skill["impact"],
+                 "locked", skill.get("description",""), skill.get("spec",""), skill.get("test_hint",""),
+                 datetime.now().isoformat(), skill.get("proposed_by","system")))
+            c.execute("DELETE FROM prereqs WHERE skill_id=?", (sid,))
+            for p in prereqs:
+                c.execute("INSERT OR IGNORE INTO prereqs VALUES (?,?)", (sid, p))
+
+        self.graph.add_node(sid, **skill)
+        for p in prereqs:
+            self.graph.add_edge(p, sid)
+        return sid
+
+    def get_next_skill(self):
+        candidates = []
+        max_d = max((len(nx.ancestors(self.graph, n)) for n in self.graph.nodes), default=1) or 1
+
+        for nid in self.graph.nodes:
+            if self._status(nid) == "completed" or not self.is_unlocked(nid):
                 continue
-            if sid in state["passing"]:
-                status = "DONE"
-            elif sid in state["failing"]:
-                status = "BROKEN"
-            else:
-                prereqs_met = all(p in state["passing"] for p in skill.prereqs)
-                status = "READY" if prereqs_met else "LOCKED"
-            deps = f" (needs: {', '.join(skill.prereqs)})" if skill.prereqs else ""
-            lines.append(f"  [{status}] {skill.name} -> {skill.file} (impact:{skill.impact}/10){deps}")
+            impact = self._field(nid, "current_impact") or 5
+            tier = self._field(nid, "tier") or 1
+            depth = len(nx.ancestors(self.graph, nid))
+            fails = self._field(nid, "fail_count") or 0
+            proposed = self._field(nid, "proposed_by") or "system"
 
-    return "\n".join(lines)
+            score = impact * (1.6 ** (tier - 1)) * (1 - depth / (max_d + 1))
+            score += 0.5 if proposed == "agent" else 0
+            score -= fails * 0.3
+            heapq.heappush(candidates, (-score, nid))
 
+        if not candidates:
+            return None
+        _, best = heapq.heappop(candidates)
+        return self._skill_dict(best)
 
-def build_goal_for_skill(skill: Skill, state: dict) -> str:
-    """Build a goal with the ENTIRE codebase injected into context."""
-    full_code = get_full_codebase_dump()
-    tree_text = get_tree_as_text()
-    tier_name = {1: "Foundation", 2: "Intelligence", 3: "Integration", 4: "Optimization"}
+    def is_unlocked(self, sid):
+        return all(self._status(p) == "completed" for p in self.graph.predecessors(sid))
 
-    # Only include prereq files in full, not everything
-    prereq_files = [SKILLS[p].file for p in skill.prereqs if p in SKILLS]
+    def mark_completed(self, sid, output=""):
+        with self._conn() as c:
+            c.execute("UPDATE skills SET status='completed', success_count=success_count+1, level=level+1, last_updated=? WHERE id=?",
+                      (datetime.now().isoformat(), sid))
+        if sid in self.graph.nodes:
+            self.graph.nodes[sid]["status"] = "completed"
+        self._log(sid, "completed", output[:200])
+        self._propagate(sid, 0.3)
 
-    return f"""You are a self-improving AI agent.
+    def mark_failed(self, sid, error=""):
+        with self._conn() as c:
+            c.execute("UPDATE skills SET fail_count=fail_count+1, last_updated=? WHERE id=?",
+                      (datetime.now().isoformat(), sid))
+        self._log(sid, "failed", error[:200])
 
-=== KEY SOURCE FILES ===
-{full_code}
+    def update_impact_from_result(self, sid, gain):
+        with self._conn() as c:
+            r = c.execute("SELECT current_impact FROM skills WHERE id=?", (sid,)).fetchone()
+            if not r: return
+            new = min(10.0, r["current_impact"] + gain * 3.0)
+            c.execute("UPDATE skills SET current_impact=? WHERE id=?", (new, sid))
+        self._log(sid, "impact_change", f"gain={gain}")
+        self._propagate(sid, gain * 0.3)
 
-=== PREREQ MODULES YOU CAN IMPORT ===
-{chr(10).join(f"from {Path(pf).stem} import *  # skills/{pf}" for pf in prereq_files) if prereq_files else "(none - this is a foundation skill)"}
+    def _propagate(self, sid, gain):
+        if abs(gain) < 0.01: return
+        for s in self.graph.successors(sid):
+            with self._conn() as c:
+                r = c.execute("SELECT current_impact FROM skills WHERE id=?", (s,)).fetchone()
+                if r:
+                    c.execute("UPDATE skills SET current_impact=? WHERE id=?", (min(10.0, r["current_impact"] + gain), s))
 
-=== SKILL TREE ===
-{tree_text}
+    # ── Intelligence ──────────────────────────────────────────────────────
 
-=== YOUR CURRENT TASK ===
-BUILD: {skill.name} (Tier {skill.tier}: {tier_name[skill.tier]}, Impact: {skill.impact}/10)
-FILE: {skill.file}
-WHY: {skill.description}
+    def get_critical_path(self):
+        try: return nx.dag_longest_path(self.graph)
+        except: return []
 
-SPEC:
-{skill.spec}
+    def get_system_weaknesses(self):
+        lines = []
+        with self._conn() as c:
+            for r in c.execute("SELECT name, fail_count FROM skills WHERE fail_count>0 ORDER BY fail_count DESC LIMIT 3"):
+                lines.append(f"Struggling: {r['name']} ({r['fail_count']} fails)")
+            path = self.get_critical_path()
+            blockers = [n for n in path if self._status(n) != "completed"]
+            if blockers:
+                lines.append(f"Blockers: {', '.join(blockers)}")
+            for r in c.execute("SELECT name, base_impact, current_impact FROM skills WHERE ABS(current_impact-base_impact)>1"):
+                d = "more" if r["current_impact"] > r["base_impact"] else "less"
+                lines.append(f"Learned: {r['name']} is {d} important ({r['base_impact']:.0f}→{r['current_impact']:.1f})")
+        return "\n".join(lines) if lines else "System is healthy"
 
-TEST REQUIREMENTS:
-{skill.test_hint}
-
-=== EXPANDING THE SYSTEM ===
-After building this skill, if you see an opportunity to improve the skill tree
-itself (add new skills, refine specs, identify missing capabilities), you can
-write suggestions to skills/tree_proposals.txt using write_file.
-Each proposal should have: skill name, file, tier, prereqs, description, spec.
-
-=== RULES ===
-1. Read ALL source files you need to understand the full system
-2. Read existing skills/*.py to understand what's built
-3. Write COMPLETE working code in {skill.file}
-4. Include 'if __name__ == "__main__":' test block
-5. Tests MUST print 'ALL TESTS PASSED' when everything works
-6. Don't import agent.py in tests (loads MLX model, too slow)
-7. CAN import from memory.py, config.py, or other skills/*.py
-8. Fix errors until tests pass, then say DONE"""
-
-
-def load_proposals():
-    """Load skill proposals written by the agent and merge into SKILLS."""
-    proposals_file = Path("skills/tree_proposals.txt")
-    if not proposals_file.exists():
-        return
-
-    try:
-        content = proposals_file.read_text()
-        # Simple parsing: look for structured proposals
-        # Agent writes: SKILL: name | FILE: x.py | TIER: N | PREREQS: a,b | DESC: ... | SPEC: ...
-        for line in content.split("\n"):
-            if not line.startswith("SKILL:"):
-                continue
+    def evolve_tree(self):
+        f = SKILLS_DIR / "tree_proposals.txt"
+        if not f.exists(): return []
+        added = []
+        for line in f.read_text().split("\n"):
+            if not line.startswith("SKILL:"): continue
             parts = {}
-            for segment in line.split("|"):
-                segment = segment.strip()
-                if ":" in segment:
-                    key, val = segment.split(":", 1)
-                    parts[key.strip().lower()] = val.strip()
-
+            for seg in line.split("|"):
+                if ":" in seg:
+                    k, v = seg.split(":", 1)
+                    parts[k.strip().lower()] = v.strip()
             if "skill" in parts and "file" in parts:
                 sid = parts["skill"].lower().replace(" ", "_")
-                if sid not in SKILLS:
-                    SKILLS[sid] = Skill(
-                        id=sid,
-                        name=parts["skill"],
-                        file=parts["file"],
-                        tier=int(parts.get("tier", 2)),
-                        impact=int(parts.get("impact", 7)),
-                        prereqs=[p.strip() for p in parts.get("prereqs", "").split(",") if p.strip()],
-                        description=parts.get("desc", parts.get("description", "")),
-                        spec=parts.get("spec", "Build this module with tests."),
-                        test_hint="Tests must print ALL TESTS PASSED",
-                    )
-    except Exception:
-        pass
+                try:
+                    self.add_skill({
+                        "id": sid, "name": parts["skill"], "file": parts["file"],
+                        "tier": int(parts.get("tier", 2)), "impact": float(parts.get("impact", 7)),
+                        "prereqs": [p.strip() for p in parts.get("prereqs", "").split(",") if p.strip()],
+                        "description": parts.get("desc", ""), "spec": parts.get("spec", "Build with tests."),
+                        "test_hint": "ALL TESTS PASSED", "proposed_by": "agent",
+                    })
+                    added.append(sid)
+                except ValueError: pass
+        if added: self._load_graph()
+        return added
 
+    # ── Goal building ─────────────────────────────────────────────────────
 
-def print_tree():
-    """Print the full skill tree with current status."""
-    state = get_system_state()
-    tier_names = {1: "FOUNDATION", 2: "INTELLIGENCE", 3: "INTEGRATION", 4: "OPTIMIZATION"}
+    def build_goal_for_skill(self, skill):
+        tree = self._tree_text()
+        weak = self.get_system_weaknesses()
+        code = self._codebase(4000)
+        tnames = {1: "Foundation", 2: "Intelligence", 3: "Integration", 4: "Optimization"}
+        pfiles = [self._field(p, "file") for p in self.graph.predecessors(skill["id"])]
+        pfiles = [f for f in pfiles if f]
 
-    for tier in [1, 2, 3, 4]:
-        print(f"\n{'─'*40}")
-        print(f"TIER {tier}: {tier_names[tier]}")
-        print(f"{'─'*40}")
-        for sid, skill in SKILLS.items():
-            if skill.tier != tier:
-                continue
-            if sid in state["passing"]:
-                status = "✅ PASSING"
-            elif sid in state["failing"]:
-                status = "❌ FAILING"
+        return f"""You are a self-improving AI agent.
+
+=== CODEBASE ===
+{code}
+
+=== SKILL TREE ===
+{tree}
+
+=== WEAKNESSES ===
+{weak}
+
+=== TASK ===
+BUILD: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')}, Impact: {skill.get('current_impact', skill.get('impact','?'))}/10)
+FILE: {skill['file']}
+WHY: {skill.get('description','')}
+
+SPEC: {skill.get('spec','')}
+TESTS: {skill.get('test_hint','')}
+
+IMPORTS: {chr(10).join(f'from {Path(f).stem} import *' for f in pfiles) if pfiles else '(none)'}
+
+RULES: Write complete code in {skill['file']}. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing.
+
+PROPOSE NEW SKILLS to skills/tree_proposals.txt: SKILL: name | FILE: x.py | TIER: N | PREREQS: a,b | DESC: ... | SPEC: ..."""
+
+    def _codebase(self, budget=4000):
+        lines, used = [], 0
+        def add(p, full=True):
+            nonlocal used
+            f = Path(p)
+            if not f.exists(): return
+            c = f.read_text()
+            est = len(c) // 4
+            if not full or used + est > budget:
+                loc = len(c.splitlines())
+                cls = [l.split("(")[0].replace("class ","").strip() for l in c.splitlines() if l.strip().startswith("class ")]
+                fns = [l.split("(")[0].replace("def ","").strip() for l in c.splitlines() if l.strip().startswith("def ")]
+                s = f"\n{p} ({loc}L)" + (f" Classes:{','.join(cls[:6])}" if cls else "") + (f" Funcs:{','.join(fns[:8])}" if fns else "")
+                lines.append(s); used += len(s)//4
             else:
-                prereqs_met = all(p in state["passing"] for p in skill.prereqs)
-                status = "⬜ READY" if prereqs_met else "🔒 LOCKED"
-            deps = f" (needs: {', '.join(skill.prereqs)})" if skill.prereqs else ""
-            print(f"  {status} [{skill.impact}/10] {skill.name} -> {skill.file}{deps}")
+                lines.append(f"\n--- {p} ---\n{c}"); used += est
+        add("src/config.py")
+        add("src/memory.py")
+        for f in sorted(SKILLS_DIR.glob("*.py")):
+            if not f.name.startswith("_"): add(f"skills/{f.name}")
+        add("src/agent.py", full=False)
+        return "\n".join(lines)
 
-    next_skill = get_next_skill()
-    if next_skill:
-        print(f"\n→ NEXT: {next_skill.name} ({next_skill.file})")
-    else:
-        print(f"\n→ ALL SKILLS COMPLETE!")
+    def _tree_text(self):
+        lines = []
+        tnames = {1:"FOUNDATION",2:"INTELLIGENCE",3:"INTEGRATION",4:"OPTIMIZATION"}
+        with self._conn() as c:
+            for t in [1,2,3,4]:
+                lines.append(f"\nTIER {t}: {tnames.get(t,'?')}")
+                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC",(t,)):
+                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+                    deps = f" (needs:{','.join(ps)})" if ps else ""
+                    lines.append(f"  [{r['status'].upper()}] {r['name']} -> {r['file']} (impact:{r['current_impact']:.1f}){deps}")
+        return "\n".join(lines)
+
+    # ── Display ───────────────────────────────────────────────────────────
+
+    def print_tree(self):
+        tnames = {1:"FOUNDATION",2:"INTELLIGENCE",3:"INTEGRATION",4:"OPTIMIZATION"}
+        with self._conn() as c:
+            for t in [1,2,3,4]:
+                print(f"\n{'─'*40}\nTIER {t}: {tnames.get(t,'?')}\n{'─'*40}")
+                for r in c.execute("SELECT * FROM skills WHERE tier=? ORDER BY current_impact DESC",(t,)):
+                    s = r["status"]
+                    icon = {"completed":"✅","failing":"❌"}.get(s, "⬜" if self.is_unlocked(r["id"]) else "🔒")
+                    ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+                    deps = f" (needs:{','.join(ps)})" if ps else ""
+                    lv = f" Lv{r['level']}" if r['level']>1 else ""
+                    fl = f" [{r['fail_count']}F]" if r['fail_count']>0 else ""
+                    print(f"  {icon} [{r['current_impact']:.1f}] {r['name']} -> {r['file']}{lv}{fl}{deps}")
+        nxt = self.get_next_skill()
+        print(f"\n→ NEXT: {nxt['name']} ({nxt['file']})" if nxt else "\n→ ALL COMPLETE!")
+        w = self.get_system_weaknesses()
+        if w != "System is healthy": print(f"\n⚠ {w}")
+
+    def get_state(self):
+        with self._conn() as c:
+            skills = []
+            for r in c.execute("SELECT * FROM skills ORDER BY tier, current_impact DESC"):
+                ps = [p["prereq_id"] for p in c.execute("SELECT prereq_id FROM prereqs WHERE skill_id=?",(r["id"],))]
+                skills.append({**dict(r), "prereqs": ps, "unlocked": self.is_unlocked(r["id"])})
+            return {"skills": skills, "total": len(skills),
+                    "completed": sum(1 for s in skills if s["status"]=="completed"),
+                    "next": self.get_next_skill(), "weaknesses": self.get_system_weaknesses()}
 
 
 if __name__ == "__main__":
-    print_tree()
+    SkillTree().print_tree()
