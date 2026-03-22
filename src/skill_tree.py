@@ -565,27 +565,66 @@ Output ONLY the Python code. No explanation."""
         prereq_code = self._prereq_code(skill)
         code_list = self._codebase()
         tnames = {1: "Foundation", 2: "Intelligence", 3: "Integration", 4: "Optimization"}
-        pfiles = [self._field(p, "file") for p in self.graph.predecessors(skill["id"])]
-        pfiles = [f for f in pfiles if f]
 
-        return f"""BUILD: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')}, Impact: {skill.get('current_impact', skill.get('impact','?'))}/10)
-FILE: {skill['file']}
-SPEC: {skill.get('spec','')}
-TESTS: {skill.get('test_hint','')}
+        # Build context about what this skill needs to integrate with
+        prereq_names = []
+        for pid in self.graph.predecessors(skill["id"]):
+            pname = self._field(pid, "name")
+            pfile = self._field(pid, "file")
+            if pname:
+                prereq_names.append(f"{pname} ({pfile})")
 
-AVAILABLE PREREQS (API signatures):
+        # Get downstream skills that depend on this one
+        dependents = []
+        for sid in self.graph.successors(skill["id"]):
+            sname = self._field(sid, "name")
+            if sname:
+                dependents.append(sname)
+
+        return f"""You are building a production-quality Python module for a self-improving AI agent system.
+
+=== TASK ===
+Module: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')})
+File: {skill['file']}
+Impact: {skill.get('current_impact', skill.get('impact','?'))}/10
+
+=== WHAT THIS MODULE DOES ===
+{skill.get('description','')}
+
+=== DETAILED SPECIFICATION ===
+{skill.get('spec','')}
+
+=== WHY IT MATTERS ===
+This module is depended on by: {', '.join(dependents) if dependents else 'nothing yet (leaf node)'}
+It builds on: {', '.join(prereq_names) if prereq_names else 'nothing (foundation skill)'}
+
+=== QUALITY REQUIREMENTS ===
+1. Production-quality code: type hints, docstrings, error handling
+2. Non-trivial implementation: real algorithms, not just pass-through wrappers
+3. Each method must have meaningful logic (10+ lines, not 1-line returns)
+4. Handle edge cases: empty inputs, None values, invalid types
+5. Tests must VERIFY correctness with assertions, not just run without error
+
+=== AVAILABLE PREREQ APIs ===
 {prereq_code}
 
+=== IMPORT RULES (CRITICAL) ===
+- Import prereqs: from <module_name> import <ClassName>
+- NEVER import from src.memory, src.config, or src.agent
+- Use ONLY stdlib + prereq imports listed above
+- If a prereq import fails, catch ImportError and provide a standalone fallback
+
+=== TEST REQUIREMENTS ===
+{skill.get('test_hint','')}
+- Include 'if __name__ == "__main__":' block
+- At least 5 test cases with assertions
+- Print 'ALL TESTS PASSED' only if ALL assertions pass
+- Test edge cases (empty input, boundary values)
+
+=== EXISTING MODULES ===
 {code_list}
 
-IMPORT RULES:
-- Import prereqs with: from <module_name> import <ClassName> (e.g. from confidence_scorer import ConfidenceScorer)
-- Do NOT import from src.memory or src.config — those are internal agent modules
-- If you need to understand a prereq fully, use read_file to read it
-- Keep your code STANDALONE — only use stdlib + the prereq imports above
-- If a prereq import fails, catch it and provide a fallback
-
-RULES: Write complete code in {skill['file']}. Include 'if __name__ == "__main__":' test block. Tests print 'ALL TESTS PASSED'. Don't import agent.py. Say DONE when passing."""
+Write the complete module to {skill['file']}. Use read_file if you need to understand any prereq. Say DONE when tests pass."""
 
     def _codebase(self, budget=1500):
         """Minimal codebase context - only prereq files get full content."""
