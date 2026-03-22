@@ -26,3 +26,8 @@ missing_import.py
 syntax_error.py
 valid.py
 runs/2*/
+
+# SQLite WAL/SHM files
+runs/skill_tree*.db-shm
+runs/skill_tree*.db-wal
+"runs/skill_tree *.db*"

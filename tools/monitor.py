@@ -432,10 +432,30 @@ if __name__ == "__main__":
         "• Ctrl+C to quit\n"
     )
 
+    console.print("[dim]Send hints to the running agent:[/]")
+    console.print("[bold]  echo 'your message' > /tmp/agent_input.txt[/]\n")
+
     with Live(build_dashboard(), refresh_per_second=0.5, screen=True) as live:
         try:
             while True:
                 live.update(build_dashboard())
                 time.sleep(2)
         except KeyboardInterrupt:
-            console.print("\n[bold yellow]Monitor stopped safely.[/]")
+            # On exit, offer input prompt
+            console.print("\n[bold yellow]Monitor paused.[/]")
+            try:
+                hint = console.input("[bold cyan]Send message to agent (or Enter to quit): [/]")
+                if hint.strip():
+                    Path("/tmp/agent_input.txt").write_text(hint.strip())
+                    console.print(f"[green]Sent: {hint.strip()}[/]")
+                    # Resume monitoring
+                    with Live(build_dashboard(), refresh_per_second=0.5, screen=True) as live2:
+                        try:
+                            while True:
+                                live2.update(build_dashboard())
+                                time.sleep(2)
+                        except KeyboardInterrupt:
+                            pass
+            except (EOFError, KeyboardInterrupt):
+                pass
+            console.print("\n[bold yellow]Monitor stopped.[/]")

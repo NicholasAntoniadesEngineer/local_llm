@@ -660,6 +660,19 @@ class MLXAgent:
                 except Exception:
                     pass
 
+            # Check for real-time user input
+            _input_file = Path("/tmp/agent_input.txt")
+            try:
+                if _input_file.exists() and _input_file.stat().st_size > 0:
+                    user_hint = _input_file.read_text().strip()
+                    _input_file.write_text("")  # Clear after reading
+                    if user_hint:
+                        print(f"  📨 USER INPUT: {user_hint[:100]}")
+                        messages.append({"role": "user", "content": f"USER INSTRUCTION: {user_hint}"})
+                        self.logger.event("user_input", {"hint": user_hint[:500]})
+            except Exception:
+                pass
+
             # Generate response
             response = self._generate_response(messages)
 
