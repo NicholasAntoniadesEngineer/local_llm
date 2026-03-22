@@ -119,7 +119,36 @@ def get_memory() -> dict:
 
 
 def get_model_info() -> dict:
+    """Read model info from the running agent's perf.json (live, not hardcoded)."""
     info: dict[str, Any] = {}
+    # Try live data first (actual running model)
+    rd = get_current_run_dir()
+    if rd:
+        pf = rd / "perf.json"
+        if pf.exists():
+            try:
+                data = json.loads(pf.read_text())
+                model_name = data.get("model", "")
+                if model_name:
+                    info["short_name"] = model_name
+                    info["name"] = model_name
+                    info["context_window"] = data.get("context_window", 0)
+                    info["max_tokens"] = data.get("max_tokens", 0)
+                    info["model_size_gb"] = data.get("model_size_gb", "?")
+                    # Find profile key by matching model name
+                    try:
+                        from src.config import CONFIG
+                        for k, m in CONFIG.models.items():
+                            if model_name in m.name:
+                                info["profile"] = k
+                                info["name"] = m.name
+                                break
+                    except Exception:
+                        pass
+                    return info
+            except Exception:
+                pass
+    # Fallback to config
     try:
         from src.config import CONFIG
         model_key = os.environ.get("AGENT_MODEL", "tool_calling")
