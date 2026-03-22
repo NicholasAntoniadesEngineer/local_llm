@@ -710,23 +710,35 @@ class MLXAgent:
                         self.memory_manager.record_discovery(result[:200])
 
                 # Update tool history for loop detection
-                tool_history.append(name)
+                tool_history.append(f"{name}:{'FAIL' if not success else 'OK'}")
 
-                # Loop detection: same tool 3+ times
-                if len(tool_history) >= 3 and len(set(tool_history[-3:])) == 1:
-                    # Check if results are similar
-                    recent = self.memory_manager.memory.iterations[-3:]
-                    results_set = set(it.result[:100] for it in recent)
-                    if len(results_set) <= 1:
-                        print(f"  🔄 LOOP: {name} x3 with same results - switching")
-                        self.logger.loop_detected(step, name, 3)
-                        old_phase = phase
-                        if name == "web_search":
-                            phase = "code"
-                        elif name == "run_python":
-                            phase = "save"
-                        self.logger.phase_change(step, old_phase, phase, f"loop on {name}")
-                        tool_history.clear()
+                # Error loop detection: same tool failing 2+ times = stuck
+                recent_fails = [h for h in tool_history[-3:] if h.endswith(":FAIL")]
+                if len(recent_fails) >= 2 and all(h.startswith(f"{name}:") for h in tool_history[-2:]):
+                    print(f"  🔄 ERROR LOOP: {name} failing repeatedly - injecting fix guidance")
+                    self.logger.loop_detected(step, name, len(recent_fails))
+                    # Inject the error directly so the model SEES it and fixes it
+                    messages.append({"role": "user", "content": (
+                        f"STOP. You've called {name} {len(recent_fails)} times and it keeps failing with:\n"
+                        f"ERROR: {result[:300]}\n\n"
+                        f"You MUST fix the bug. If you can't fix it in one more try, "
+                        f"rewrite the ENTIRE file from scratch with simpler code. "
+                        f"Do NOT repeat the same code."
+                    )})
+                    tool_history.clear()
+
+                # General loop: same tool 3+ times regardless of success
+                tool_names_only = [h.split(":")[0] for h in tool_history]
+                if len(tool_names_only) >= 3 and len(set(tool_names_only[-3:])) == 1:
+                    print(f"  🔄 LOOP: {tool_names_only[-1]} x3 - forcing phase switch")
+                    self.logger.loop_detected(step, tool_names_only[-1], 3)
+                    old_phase = phase
+                    if name == "web_search":
+                        phase = "code"
+                    elif name == "run_python":
+                        phase = "save"
+                    self.logger.phase_change(step, old_phase, phase, f"loop on {name}")
+                    tool_history.clear()
 
                 # Phase transitions
                 if name == "web_search":
