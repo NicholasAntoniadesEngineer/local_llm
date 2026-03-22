@@ -1,181 +1,336 @@
 #!/usr/bin/env python3
 """
-Self-Improving Agent: Single entry point for agent improvement cycles.
+Self-aware improvement loop.
 
-Each cycle: Agent builds ONE concrete feature that extends capabilities.
+Each cycle the agent:
+1. Reads the ENTIRE codebase
+2. Reads what it has already built (agent_outputs/)
+3. Reads its own history of successes and failures
+4. DECIDES what to improve next based on what would have the most impact
+5. Builds it, tests it, keeps it only if it passes
+
+The agent sees everything. It chooses what matters.
 """
 
-import subprocess
+import os
 import sys
+import time
+import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from agent import MLXAgent
+from logger import AgentLogger
+from skill_tree import get_next_skill, get_system_state, build_goal_for_skill, print_tree
 
 
-class ImprovementCycle:
-    """Manages a single improvement cycle."""
+HISTORY_FILE = Path("./agent_outputs/.history.json")
 
-    # Define what to build in each cycle
-    FEATURES = {
-        1: {
-            "name": "Search Result Caching",
-            "description": "Cache API results to avoid duplicate calls",
-            "file": "cache.py",
-        },
-        2: {
-            "name": "Performance Metrics",
-            "description": "Track and log agent performance metrics",
-            "file": "metrics.py",
-        },
-        3: {
-            "name": "Memory Compression",
-            "description": "Automatically compress old discoveries",
-            "file": "compression.py",
-        },
+
+def load_history() -> dict:
+    """Load improvement history - what worked, what failed, what exists."""
+    if HISTORY_FILE.exists():
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    return {"cycles": [], "total_passed": 0, "total_failed": 0}
+
+
+def save_history(history: dict):
+    """Persist improvement history."""
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+
+def scan_codebase() -> str:
+    """Build a map of the entire codebase for the agent to see."""
+    lines = []
+
+    # Core source files
+    lines.append("=== CORE SOURCE FILES ===")
+    for f in sorted(Path(".").glob("*.py")):
+        size = f.stat().st_size
+        with open(f) as fh:
+            first_line = fh.readline().strip()
+            # Count classes and functions
+            content = fh.read()
+            classes = content.count("\nclass ")
+            funcs = content.count("\ndef ")
+        lines.append(f"  {f.name} ({size:,}B) - {classes} classes, {funcs} functions - {first_line}")
+
+    # Agent outputs (what's already been built)
+    lines.append("\n=== ALREADY BUILT (agent_outputs/) ===")
+    output_dir = Path("./agent_outputs")
+    if output_dir.exists():
+        py_files = sorted(output_dir.glob("*.py"))
+        if py_files:
+            for f in py_files:
+                if f.name.startswith("."):
+                    continue
+                size = f.stat().st_size
+                # Quick test
+                try:
+                    env = os.environ.copy()
+                    env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(output_dir.resolve())
+                    result = subprocess.run(
+                        ["python3", str(f)], capture_output=True, text=True,
+                        timeout=10, env=env,
+                    )
+                    status = "PASSING" if "PASSED" in result.stdout else "FAILING"
+                except Exception:
+                    status = "ERROR"
+                lines.append(f"  {f.name} ({size:,}B) [{status}]")
+        else:
+            lines.append("  (nothing built yet)")
+    else:
+        lines.append("  (directory doesn't exist)")
+
+    return "\n".join(lines)
+
+
+def scan_history(history: dict) -> str:
+    """Summarize what's been attempted before."""
+    if not history["cycles"]:
+        return "No previous improvement attempts."
+
+    lines = [f"Previous attempts: {history['total_passed']} passed, {history['total_failed']} failed\n"]
+    lines.append("Recent cycles:")
+    for cycle in history["cycles"][-8:]:
+        status = "PASS" if cycle["passed"] else "FAIL"
+        lines.append(f"  [{status}] {cycle['target']} - {cycle.get('reason', '')[:60]}")
+
+    return "\n".join(lines)
+
+
+def build_goal(cycle_num: int, codebase_map: str, history_summary: str) -> dict:
+    """Build an intelligent, context-aware goal for the agent.
+
+    The agent sees the full codebase, what's already built, and what failed before.
+    It must decide what would be most impactful to build next.
+    """
+
+    # Figure out what's already passing so the agent doesn't rebuild it
+    existing_passing = []
+    existing_failing = []
+    output_dir = Path("./agent_outputs")
+    for f in sorted(output_dir.glob("*.py")):
+        if f.name.startswith("."):
+            continue
+        try:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(output_dir.resolve())
+            r = subprocess.run(["python3", str(f)], capture_output=True, text=True, timeout=10, env=env)
+            if "PASSED" in r.stdout:
+                existing_passing.append(f.name)
+            else:
+                existing_failing.append(f.name)
+        except Exception:
+            existing_failing.append(f.name)
+
+    passing_str = ", ".join(existing_passing) if existing_passing else "none"
+    failing_str = ", ".join(existing_failing) if existing_failing else "none"
+
+    goal = f"""Improve this MLX agent system. Cycle #{cycle_num}.
+
+SOURCE FILES: {codebase_map}
+
+ALREADY BUILT AND PASSING (do NOT rebuild these): {passing_str}
+BUILT BUT FAILING (fix or replace): {failing_str}
+
+HISTORY: {history_summary}
+
+You MUST build something NEW that doesn't exist yet, or fix a failing file.
+Do NOT recreate {passing_str}.
+
+Ideas for new modules:
+- error_recovery.py: retry failed tool calls with backoff
+- code_validator.py: syntax check + test runner for generated code
+- task_planner.py: decompose complex goals into steps
+- confidence_scorer.py: score how confident the agent is in its output
+- result_evaluator.py: compare tool results to detect duplicates
+- tool_router.py: pick the best tool for the current situation
+
+Read source files, write code, test it, save it.
+Tests must print 'ALL TESTS PASSED'. Don't import agent.py in tests.
+Say DONE when tests pass."""
+
+    return {
+        "goal": goal,
+        "test_cmd": None,  # Discovered dynamically
+        "success_marker": "PASSED",
     }
 
-    def __init__(self, cycle_num: int):
-        """Initialize improvement cycle."""
-        self.cycle_num = cycle_num
-        self.feature = self.FEATURES.get(cycle_num)
 
-    def run(self) -> bool:
-        """Run the improvement cycle."""
+def discover_output_file():
+    """Find the most recently created/modified .py file in agent_outputs."""
+    output_dir = Path("./agent_outputs")
+    py_files = sorted(output_dir.glob("*.py"), key=lambda f: f.stat().st_mtime, reverse=True)
+    for f in py_files:
+        if f.name.startswith("."):
+            continue
+        return str(f)
+    return None
 
-        if not self.feature:
-            print(f"\n✅ Predefined cycles complete. Agent can now choose improvements.")
-            return True
 
-        print(f"\n{'='*80}")
-        print(f"CYCLE #{self.cycle_num}: {self.feature['name']}")
-        print(f"{'='*80}")
+def validate_output(filepath: str) -> tuple[bool, str]:
+    """Validate generated code actually works."""
+    path = Path(filepath)
+    if not path.exists():
+        return False, "File not created"
 
-        # Create goal for agent
-        goal = self._create_goal()
+    size = path.stat().st_size
+    if size < 200:
+        return False, f"Too small ({size}B) - placeholder"
 
-        # Run agent
-        try:
-            agent = MLXAgent(
-                config_model_name="balanced",
-                goal=f"Build: {self.feature['name']}"
-            )
-            agent.run_loop(goal)
+    # Syntax check
+    try:
+        result = subprocess.run(
+            ["python3", "-m", "py_compile", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return False, f"Syntax error: {result.stderr[:200]}"
+    except Exception as e:
+        return False, f"Compile failed: {e}"
 
-            # Commit changes
-            self._commit_changes()
-            return True
+    # Run tests
+    try:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(Path("./agent_outputs").resolve())
+        result = subprocess.run(
+            ["python3", str(path)],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        output = result.stdout + result.stderr
+        if "PASSED" in output:
+            return True, f"Tests passed ({size:,}B)"
+        else:
+            return False, f"Tests failed: {output[:200]}"
+    except subprocess.TimeoutExpired:
+        return False, "Timed out (30s)"
+    except Exception as e:
+        return False, f"Error: {e}"
 
-        except Exception as e:
-            print(f"\n❌ Cycle failed: {e}")
-            return False
 
-    def _create_goal(self) -> str:
-        """Create the improvement goal for the agent."""
+def run_cycle(cycle_num: int) -> bool:
+    """Run one self-aware improvement cycle."""
+    history = load_history()
 
-        return f"""
-CYCLE #{self.cycle_num}: Build {self.feature['name']}
+    # Skill tree decides what to build
+    state = get_system_state()
+    skill = get_next_skill()
 
-TASK:
-Create a new file '{self.feature['file']}' that implements {self.feature['description']}.
+    if not skill:
+        print("\n🎉 ALL SKILLS COMPLETE! The agent has reached full capability.")
+        print_tree()
+        return True
 
-REQUIREMENTS:
-1. Write COMPLETE, working Python code
-2. Include docstrings and type hints
-3. Make it production-quality
-4. Test it works with run_python
-5. Save to {self.feature['file']}
+    goal_text = build_goal_for_skill(skill, state)
 
-EXAMPLE STRUCTURE:
-- Class or functions with clear purpose
-- Docstrings on all public methods
-- Type hints on parameters and returns
-- Working example/test at the bottom
+    print(f"\n{'='*70}")
+    print(f"CYCLE #{cycle_num} | {datetime.now().strftime('%H:%M:%S')}")
+    print(f"BUILDING: {skill.name} (Tier {skill.tier}, Impact {skill.impact}/10)")
+    print(f"FILE: {skill.file}")
+    print(f"{'='*70}")
+    print_tree()
+    print()
 
-Build this now.
-"""
+    output_dir = Path("./agent_outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _commit_changes(self) -> bool:
-        """Commit the new feature to git."""
-        try:
-            file_path = self.feature['file']
+    # Run the agent with skill-tree goal
+    try:
+        model = os.environ.get("AGENT_MODEL", "tool_calling")
+        agent = MLXAgent(config_model_name=model, goal=f"Build: {skill.name}")
+        agent.run_loop(goal_text)
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        print(f"\n❌ Agent error: {e}")
+        history["cycles"].append({
+            "cycle": cycle_num, "target": "unknown", "passed": False,
+            "reason": str(e)[:100], "timestamp": datetime.now().isoformat(),
+        })
+        history["total_failed"] += 1
+        save_history(history)
+        return False
 
-            # Check if file was created
-            if not Path(file_path).exists():
-                print(f"⚠️  File {file_path} not created")
-                return False
+    # Check the skill's target file
+    target_file = str(output_dir / skill.file)
+    target_name = skill.file
 
-            # Stage and commit
-            subprocess.run(["git", "add", file_path], timeout=5, check=True)
+    if not Path(target_file).exists():
+        print("\n❌ No output file produced")
+        history["cycles"].append({
+            "cycle": cycle_num, "target": "none", "passed": False,
+            "reason": "No file produced", "timestamp": datetime.now().isoformat(),
+        })
+        history["total_failed"] += 1
+        save_history(history)
+        return False
 
-            commit_msg = (
-                f"feat(cycle{self.cycle_num}): {self.feature['name']}\n\n"
-                f"- {self.feature['description']}\n"
-                f"- Timestamp: {datetime.now().isoformat()}"
-            )
+    target_name = Path(target_file).name
+    print(f"\n{'─'*40}")
+    print(f"VALIDATING: {target_file}")
 
-            subprocess.run(
-                ["git", "commit", "-m", commit_msg],
-                timeout=5,
-                check=True,
-                capture_output=True
-            )
+    ok, msg = validate_output(target_file)
 
-            print(f"\n✅ Committed: {self.feature['name']}")
-            return True
+    # Log validation
+    cycle_logger = AgentLogger(f"cycle_{cycle_num}")
+    cycle_logger.validation(target_name, ok, msg)
 
-        except Exception as e:
-            print(f"⚠️  Commit failed: {e}")
-            return False
+    if ok:
+        print(f"✅ PASSED: {target_name} - {msg}")
+        history["cycles"].append({
+            "cycle": cycle_num, "target": target_name, "passed": True,
+            "reason": msg[:100], "timestamp": datetime.now().isoformat(),
+        })
+        history["total_passed"] += 1
+    else:
+        print(f"❌ FAILED: {target_name} - {msg}")
+        if Path(target_file).exists():
+            Path(target_file).unlink()
+            print(f"🗑️  Deleted: {target_name}")
+        history["cycles"].append({
+            "cycle": cycle_num, "target": target_name, "passed": False,
+            "reason": msg[:100], "timestamp": datetime.now().isoformat(),
+        })
+        history["total_failed"] += 1
+
+    save_history(history)
+    return ok
 
 
 def main():
-    """Main entry point."""
-
     if len(sys.argv) < 2:
-        print("Usage: python improve.py <cycle_number> [--loop]")
-        print("\nExamples:")
+        print("Usage:")
         print("  python improve.py 1           # Run cycle 1")
-        print("  python improve.py 1 --loop    # Run cycles continuously")
+        print("  python improve.py 1 --loop    # Run continuously")
+        print("")
+        print("The agent sees the ENTIRE codebase each cycle and")
+        print("DECIDES what to improve based on what would have the most impact.")
         sys.exit(1)
 
-    try:
-        cycle_num = int(sys.argv[1])
-    except ValueError:
-        print("Error: cycle_number must be an integer")
-        sys.exit(1)
-
-    # Check for loop mode
-    loop_mode = len(sys.argv) > 2 and sys.argv[2] == "--loop"
+    cycle_num = int(sys.argv[1])
+    loop_mode = "--loop" in sys.argv
 
     if loop_mode:
-        # Continuous loop
         current = cycle_num
         while True:
-            print(f"\n{'='*80}")
-            print(f"Cycle #{current}")
-            print(f"{'='*80}\n")
-
-            cycle = ImprovementCycle(current)
-            success = cycle.run()
-
-            if not success and current > 10:
-                print("Too many failures, stopping")
-                break
-
-            current += 1
-
             try:
-                print("\nWaiting 3 seconds before next cycle...")
-                import time
+                ok = run_cycle(current)
+                h = load_history()
+                rate = h["total_passed"] / max(1, h["total_passed"] + h["total_failed"])
+                print(f"\n📊 Overall: {h['total_passed']} passed, {h['total_failed']} failed ({rate:.0%} success rate)")
+                current += 1
                 time.sleep(3)
             except KeyboardInterrupt:
-                print("\n\nStopped by user")
+                h = load_history()
+                print(f"\n\nFinal: {h['total_passed']} passed, {h['total_failed']} failed")
                 break
     else:
-        # Single cycle
-        cycle = ImprovementCycle(cycle_num)
-        success = cycle.run()
-        sys.exit(0 if success else 1)
+        ok = run_cycle(cycle_num)
+        sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
