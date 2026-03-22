@@ -427,26 +427,26 @@ def build_dashboard() -> Layout:
         expand=True,
     )
 
-    # Layout
+    # Layout: rows stacked vertically
+    # Row 1: Model | Hardware
+    # Row 2: Agent | Performance
+    # Row 3: SkillTree | Cycles
+    # Row 4: Agent Logs + Terminal Output (full width)
+    row1 = Layout(name="row1", size=10)
+    row1.split_row(Layout(model_table), Layout(hw_table))
+
+    row2 = Layout(name="row2", size=8)
+    row2.split_row(Layout(agent_table), Layout(perf_table))
+
+    row3 = Layout(name="row3", size=9)
+    row3.split_row(Layout(brain_table), Layout(cycle_table))
+
+    row4 = Layout(name="row4", ratio=1)
+    row4.split_row(Layout(logs_panel), Layout(raw_panel))
+
     layout.split(
         Layout(header, name="header", size=3),
-        Layout(name="body", ratio=1),
-    )
-    layout["body"].split_row(
-        Layout(name="left", ratio=1),
-        Layout(name="right", ratio=1),
-    )
-    layout["left"].split(
-        Layout(model_table, size=12),
-        Layout(hw_table, size=9),
-        Layout(agent_table, size=9),
-        Layout(brain_table, size=12),
-    )
-    layout["right"].split(
-        Layout(perf_table, size=10),
-        Layout(cycle_table, size=9),
-        Layout(logs_panel, size=12),
-        Layout(raw_panel, ratio=1),   # ← Live terminal output
+        row1, row2, row3, row4,
     )
 
     return layout
