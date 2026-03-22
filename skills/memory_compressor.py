@@ -1,58 +1,59 @@
-import json
+"""Compress old session iterations to save context window tokens."""
+
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
-@dataclass
-class CompressedSessionMemory:
-    session_id: str
-    goal: str
-    start_time: str
-    iterations: List[Dict[str, Any]] = field(default_factory=list)
-    discoveries: List[str] = field(default_factory=list)
-    failures: List[Dict[str, Any]] = field(default_factory=list)
-    successes: List[Dict[str, Any]] = field(default_factory=list)
-    summary: str = ""
 
-    @classmethod
-def compress(cls, session_memory: 'SessionMemory', max_iterations: int = 10) -> 'CompressedSessionMemory':
-    # Keep only the last max_iterations iterations
-    recent_iterations = session_memory.iterations[-max_iterations:] if len(session_memory.iterations) > max_iterations else session_memory.iterations
+def compress_session(iterations: List[Dict[str, Any]], keep_recent: int = 10) -> Dict[str, Any]:
+    """Compress a list of iteration dicts, keeping only the most recent ones.
 
-    # Summarize older iterations
-    older_iterations = session_memory.iterations[:-max_iterations] if len(session_memory.iterations) > max_iterations else []
-    summary = "\n".join([f"Step {it.step}: {it.tool_used} - {it.result[:50]}..." for it in older_iterations])
+    Returns dict with 'recent' (full iterations) and 'summary' (compressed old ones).
+    """
+    if len(iterations) <= keep_recent:
+        return {"recent": iterations, "summary": "", "total": len(iterations), "compressed": 0, "kept": len(iterations)}
 
-    return cls(
-        session_id=session_memory.session_id,
-        goal=session_memory.goal,
-        start_time=session_memory.start_time,
-        iterations=recent_iterations,
-        discoveries=session_memory.discoveries,
-        failures=session_memory.failures,
-        successes=session_memory.successes,
-        summary=summary
-    )
+    recent = iterations[-keep_recent:]
+    older = iterations[:-keep_recent]
 
-# Test block
-def test_compress():
-    # Create a fake SessionMemory with 50 iterations
-    from memory import SessionMemory, Iteration
-    fake_iterations = [Iteration(step=i, tool_used=f"tool_{i%5}", input_args={f"arg_{i%5}": i}, result=f"result_{i}", success=True) for i in range(50)]
-    fake_session_memory = SessionMemory(
-        session_id="test_session",
-        goal="test_goal",
-        start_time="2023-01-01T00:00:00",
-        iterations=fake_iterations
-    )
+    # Summarize older iterations: tool name + success/fail + first 40 chars of result
+    summary_lines = []
+    for it in older:
+        tool = it.get("tool", it.get("tool_used", "?"))
+        ok = "OK" if it.get("success", False) else "FAIL"
+        result = str(it.get("result", ""))[:40]
+        summary_lines.append(f"{tool}:{ok} {result}")
 
-    # Compress the session memory
-    compressed_memory = CompressedSessionMemory.compress(fake_session_memory)
+    return {
+        "recent": recent,
+        "summary": "\n".join(summary_lines),
+        "total": len(iterations),
+        "compressed": len(older),
+        "kept": len(recent),
+    }
 
-    # Verify the result has <= 10 iterations
-    assert len(compressed_memory.iterations) <= 10, f"Expected <=10 iterations, got {len(compressed_memory.iterations)}"
-    assert compressed_memory.summary != "", "Summary should not be empty"
-
-    print('ALL TESTS PASSED')
 
 if __name__ == "__main__":
-    test_compress()
+    # Test with 50 iterations
+    iters = [
+        {"tool": f"tool_{i % 5}", "result": f"result_{i}", "success": i % 3 != 0}
+        for i in range(50)
+    ]
+
+    result = compress_session(iters, keep_recent=10)
+    assert len(result["recent"]) == 10, f"Expected 10 recent, got {len(result['recent'])}"
+    assert result["compressed"] == 40, f"Expected 40 compressed, got {result['compressed']}"
+    assert result["total"] == 50
+    assert len(result["summary"]) > 0, "Summary should not be empty"
+
+    # Test with fewer than keep_recent
+    small = compress_session(iters[:5], keep_recent=10)
+    assert len(small["recent"]) == 5
+    assert small["summary"] == ""
+    assert small["compressed"] == 0
+
+    # Test with exactly keep_recent
+    exact = compress_session(iters[:10], keep_recent=10)
+    assert len(exact["recent"]) == 10
+    assert exact["summary"] == ""
+
+    print('ALL TESTS PASSED')

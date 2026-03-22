@@ -149,19 +149,25 @@ class SkillTree:
                 self.graph.add_edge(r["prereq_id"], r["skill_id"])
 
     def _scan_completed(self):
-        """Detect passing skill files on disk."""
+        """Detect passing skill files on disk with rigorous validation."""
         for nid in list(self.graph.nodes):
             n = self.graph.nodes[nid]
             if n.get("status") == "completed":
                 continue
             fpath = SKILLS_DIR / (self._field(nid, "file") or "")
-            if not fpath.exists():
+            if not fpath.exists() or fpath.stat().st_size < 200:
                 continue
             try:
+                source = fpath.read_text()
+                # Must parse as valid Python
+                compile(source, str(fpath), "exec")
+                # Must contain at least one class or function
+                if "def " not in source and "class " not in source:
+                    continue
                 env = os.environ.copy()
                 env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(SKILLS_DIR)
-                r = subprocess.run(["python3", str(fpath)], capture_output=True, text=True, timeout=10, env=env)
-                if "PASSED" in r.stdout:
+                r = subprocess.run(["python3", str(fpath)], capture_output=True, text=True, timeout=15, env=env)
+                if r.returncode == 0 and "ALL TESTS PASSED" in r.stdout and "Traceback" not in r.stderr:
                     self.mark_completed(nid, "auto-detected")
             except Exception:
                 pass
@@ -512,7 +518,11 @@ Output ONLY the Python code. No explanation."""
 
             del model, tokenizer  # Free GPU memory
 
-            if "PASSED" in result.stdout:
+            if (result.returncode == 0
+                    and "ALL TESTS PASSED" in result.stdout
+                    and "Traceback" not in result.stderr
+                    and len(code) >= 200
+                    and ("def " in code or "class " in code)):
                 self.add_skill(proposal)
                 self.mark_completed(sid, "auto-implemented")
                 _evo_log(f"IMPLEMENT SUCCESS: {sid} passes tests")

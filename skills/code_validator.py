@@ -20,7 +20,7 @@ class CodeValidator:
     def check_imports(code_str: str) -> List[str]:
         try:
             tree = ast.parse(code_str)
-            imports = [node.names[0][0] for node in tree.body if isinstance(node, ast.Import)]
+            imports = [alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names]
             
             # Check for from ... import ... syntax
             from_imports = []

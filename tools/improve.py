@@ -201,10 +201,15 @@ def validate_output(filepath: str) -> tuple[bool, str]:
             ["python3", str(path)],
             capture_output=True, text=True, timeout=30, env=env,
         )
-        output = result.stdout + result.stderr
-        if "PASSED" in output:
+        source = path.read_text()
+        has_code = "def " in source or "class " in source
+        if (result.returncode == 0
+                and "ALL TESTS PASSED" in result.stdout
+                and "Traceback" not in result.stderr
+                and has_code):
             return True, f"Tests passed ({size:,}B)"
         else:
+            output = result.stdout + result.stderr
             return False, f"Tests failed: {output[:200]}"
     except subprocess.TimeoutExpired:
         return False, "Timed out (30s)"

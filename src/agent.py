@@ -152,7 +152,14 @@ class MLXAgent:
 
             self._draft_model = None
 
-            print(f"✅ Loaded {self.config_model.name} via MLX")
+            # Compute actual model size for accurate bandwidth reporting
+            try:
+                total_bytes = sum(v.nbytes for _, v in mx.utils.tree_flatten(self.model.parameters()))
+                self._model_size_gb = total_bytes / 1e9
+            except Exception:
+                self._model_size_gb = 8.0  # fallback
+
+            print(f"✅ Loaded {self.config_model.name} via MLX ({self._model_size_gb:.1f} GB)")
             print(f"📁 Output folder: {CONFIG.output_dir.resolve()}")
             print(f"📊 Context: {self.config_model.context_window} tokens")
             if self._prompt_cache:
@@ -213,27 +220,41 @@ class MLXAgent:
             stream_file = self.logger.run_dir / "stream.txt"
             response_parts = []
             token_count = 0
+            first_token_time = None
+            last_stream_write = t0
+            last_perf_write = t0
 
             try:
                 for chunk in self._stream_generate(self.model, self.tokenizer, **kwargs):
                     token_count += 1
                     response_parts.append(chunk.text)
-                    # Stream file every 10 tokens, perf stats every 100
-                    if token_count % 10 == 0:
-                        elapsed_so_far = _time.perf_counter() - t0
-                        live_tok_s = token_count / max(0.01, elapsed_so_far)
+
+                    # Measure time-to-first-token (= actual prefill time)
+                    if first_token_time is None:
+                        first_token_time = _time.perf_counter() - t0
+
+                    now = _time.perf_counter()
+                    elapsed_so_far = now - t0
+
+                    # Time-based stream write (~1s interval)
+                    if now - last_stream_write > 1.0:
                         try:
                             with open(stream_file, "w") as sf:
                                 sf.write("".join(response_parts))
                         except Exception:
                             pass
-                    # Perf stats less frequently (heavy JSON write)
-                    if token_count % 100 == 0:
+                        last_stream_write = now
+
+                    # Perf stats (~3s interval)
+                    if now - last_perf_write > 3.0:
+                        decode_time = max(0.01, elapsed_so_far - (first_token_time or 0))
+                        decode_tok_s = (token_count - 1) / decode_time if token_count > 1 else 0
+                        live_tok_s = token_count / max(0.01, elapsed_so_far)
                         try:
                             live_stats = {
                                 "gen_tok_s": round(live_tok_s, 1),
-                                "avg_tok_s": round(live_tok_s, 1),
-                                "peak_tok_s": round(max(self._perf.get("peak_tok_s", 0), live_tok_s), 1),
+                                "decode_tok_s": round(decode_tok_s, 1),
+                                "peak_tok_s": round(max(self._perf.get("peak_tok_s", 0), decode_tok_s), 1),
                                 "prompt_tokens": prompt_tokens,
                                 "gen_tokens": token_count,
                                 "total_gen_tokens": self._perf["total_tokens"] + token_count,
@@ -247,17 +268,15 @@ class MLXAgent:
                                 "context_pct": round((prompt_tokens + token_count) / self.config_model.context_window * 100, 1),
                                 "model": self.config_model.name.split("/")[-1],
                                 "max_tokens": self.config_model.max_tokens,
-                                "tool_calls": self._perf["tool_success"]["total"],
-                                "tool_success": self._perf["tool_success"]["success"],
-                                "tool_success_rate": round(self._perf["tool_success"]["success"] / max(1, self._perf["tool_success"]["total"]) * 100, 0),
-                                "avg_step_time": round((self._perf["total_gen_time"] + elapsed_so_far) / max(1, len(self._perf["step_times"]) + 1), 1),
-                                "bandwidth_used_gbs": round(8.0 * live_tok_s, 1),
+                                "prefill_time_s": round(first_token_time or 0, 2),
+                                "bandwidth_used_gbs": round(self._model_size_gb * decode_tok_s, 1),
                                 "generating": True,
                             }
                             with open(self.logger.run_dir / "perf.json", "w") as pf:
                                 json.dump(live_stats, pf)
                         except Exception:
                             pass
+                        last_perf_write = now
                 response = "".join(response_parts)
                 # Final write + append to full history
                 try:
@@ -286,10 +305,10 @@ class MLXAgent:
 
             avg_tok_s = self._perf["total_tokens"] / max(0.01, self._perf["total_gen_time"])
 
-            # Estimate true decode speed (exclude prefill time)
-            est_prefill_time = prompt_tokens / 286.0
-            est_decode_time = max(0.1, elapsed - est_prefill_time)
-            true_decode_tok_s = gen_tokens / est_decode_time
+            # True decode speed using measured time-to-first-token
+            actual_prefill = first_token_time if first_token_time else (prompt_tokens / 300.0)
+            decode_time = max(0.01, elapsed - actual_prefill)
+            true_decode_tok_s = max(0, token_count - 1) / decode_time if token_count > 1 else gen_tok_s
 
             # Write stats to file for monitor to read
             total_steps = len(self._perf["step_times"])
@@ -301,14 +320,11 @@ class MLXAgent:
             stats = {
                 "gen_tok_s": round(gen_tok_s, 1),
                 "decode_tok_s": round(true_decode_tok_s, 1),
-                "decode_max": 41.0,
-                "decode_efficiency": round(true_decode_tok_s / 41.0 * 100, 0),
-                "prefill_time_s": round(est_prefill_time, 1),
-                "decode_time_s": round(est_decode_time, 1),
+                "prefill_time_s": round(actual_prefill, 2),
+                "prefill_tok_s": round(prompt_tokens / max(0.01, actual_prefill), 0),
+                "decode_time_s": round(decode_time, 2),
                 "avg_tok_s": round(avg_tok_s, 1),
-                "peak_tok_s": round(max(
-                    self._perf.get("peak_tok_s", 0), gen_tok_s
-                ), 1),
+                "peak_tok_s": round(max(self._perf.get("peak_tok_s", 0), true_decode_tok_s), 1),
                 "prompt_tokens": prompt_tokens,
                 "gen_tokens": gen_tokens,
                 "total_gen_tokens": self._perf["total_tokens"],
@@ -321,15 +337,13 @@ class MLXAgent:
                 "context_window": self.config_model.context_window,
                 "context_pct": round(context_pct, 1),
                 "model": self.config_model.name.split("/")[-1],
+                "model_size_gb": round(self._model_size_gb, 1),
                 "max_tokens": self.config_model.max_tokens,
                 "tool_calls": tool_total,
                 "tool_success": tool_ok,
                 "tool_success_rate": round(tool_ok / max(1, tool_total) * 100, 0),
                 "avg_step_time": round(sum(self._perf["step_times"]) / max(1, total_steps), 1),
-                "messages_in_context": len(messages) if 'messages' in dir() else 0,
-                # Bandwidth = model_size_bytes × tokens_generated / time
-                # 14B at 4-bit ≈ 8GB weights read per token generated
-                "bandwidth_used_gbs": round(8.0 * gen_tok_s, 1),
+                "bandwidth_used_gbs": round(self._model_size_gb * true_decode_tok_s, 1),
                 "generating": False,
             }
             self._perf["peak_tok_s"] = stats["peak_tok_s"]
@@ -348,7 +362,7 @@ class MLXAgent:
             )
 
             # Free GPU memory to prevent Metal kernel panic (IOGPUMemory OOM)
-            mx.metal.clear_cache()
+            mx.clear_cache()
             gc.collect()
 
             # Strip thinking blocks
@@ -631,7 +645,9 @@ class MLXAgent:
 
         phase = "research"
         consecutive_no_tool = 0
-        tool_history: list[str] = []  # Track recent tool names for loop detection
+        # Content-hash loop detection: catches write→test→write→test oscillation
+        _seen_writes: dict[str, int] = {}   # hash(content) → count
+        _seen_errors: dict[str, int] = {}   # hash(error[:200]) → count
 
         for step in range(1, CONFIG.max_iterations + 1):
             # Inject skill focus every 5 steps or on failure
@@ -709,36 +725,37 @@ class MLXAgent:
                     if success and name == "web_search":
                         self.memory_manager.record_discovery(result[:200])
 
-                # Update tool history for loop detection
-                tool_history.append(f"{name}:{'FAIL' if not success else 'OK'}")
+                # ── Content-hash loop detection ──────────────────────────
+                import hashlib as _hl
+                _stuck = False
 
-                # Error loop detection: same tool failing 2+ times = stuck
-                recent_fails = [h for h in tool_history[-3:] if h.endswith(":FAIL")]
-                if len(recent_fails) >= 2 and all(h.startswith(f"{name}:") for h in tool_history[-2:]):
-                    print(f"  🔄 ERROR LOOP: {name} failing repeatedly - injecting fix guidance")
-                    self.logger.loop_detected(step, name, len(recent_fails))
-                    # Inject the error directly so the model SEES it and fixes it
+                if name == "write_file" and success:
+                    h = _hl.md5(args.get("content", "")[:500].encode()).hexdigest()
+                    _seen_writes[h] = _seen_writes.get(h, 0) + 1
+                    if _seen_writes[h] >= 2:
+                        _stuck = True
+                        print(f"  🔄 STUCK: wrote identical file {_seen_writes[h]}x")
+
+                if not success:
+                    h = _hl.md5(result[:200].encode()).hexdigest()
+                    _seen_errors[h] = _seen_errors.get(h, 0) + 1
+                    if _seen_errors[h] >= 2:
+                        _stuck = True
+                        print(f"  🔄 STUCK: same error {_seen_errors[h]}x")
+
+                if _stuck:
+                    self.logger.loop_detected(step, name, 2)
                     messages.append({"role": "user", "content": (
-                        f"STOP. You've called {name} {len(recent_fails)} times and it keeps failing with:\n"
-                        f"ERROR: {result[:300]}\n\n"
-                        f"You MUST fix the bug. If you can't fix it in one more try, "
-                        f"rewrite the ENTIRE file from scratch with simpler code. "
-                        f"Do NOT repeat the same code."
+                        f"STOP. You are stuck in a loop - writing the same code or hitting the same error repeatedly.\n"
+                        f"LATEST ERROR: {result[:400]}\n\n"
+                        f"You MUST take a COMPLETELY DIFFERENT approach:\n"
+                        f"1. Do NOT write the same code again\n"
+                        f"2. Simplify drastically - remove complex imports, use only stdlib\n"
+                        f"3. If importing from other skills fails, write standalone code instead\n"
+                        f"4. Make the simplest possible version that passes tests"
                     )})
-                    tool_history.clear()
-
-                # General loop: same tool 3+ times regardless of success
-                tool_names_only = [h.split(":")[0] for h in tool_history]
-                if len(tool_names_only) >= 3 and len(set(tool_names_only[-3:])) == 1:
-                    print(f"  🔄 LOOP: {tool_names_only[-1]} x3 - forcing phase switch")
-                    self.logger.loop_detected(step, tool_names_only[-1], 3)
-                    old_phase = phase
-                    if name == "web_search":
-                        phase = "code"
-                    elif name == "run_python":
-                        phase = "save"
-                    self.logger.phase_change(step, old_phase, phase, f"loop on {name}")
-                    tool_history.clear()
+                    _seen_writes.clear()
+                    _seen_errors.clear()
 
                 # Phase transitions
                 if name == "web_search":
@@ -750,26 +767,23 @@ class MLXAgent:
 
                 # Add to conversation as tool response
                 messages.append({"role": "assistant", "content": response})
-                # Give model FULL file contents - we have 128K context, use it
-                messages.append({"role": "tool", "content": result[:20000]})
+                # Truncate long tool results to save context
+                max_result = min(4000, self.config_model.context_window // 4)
+                messages.append({"role": "tool", "content": result[:max_result]})
 
-            # Keep conversation manageable but preserve enough context
-            if len(messages) > 60:
-                # Keep system + last 56 messages - we have 128K context, USE IT ALL
-                mem_ctx = self._build_memory_context()
-                messages = messages[:1] + [
-                    {"role": "user", "content": f"CONTEXT: {mem_ctx}\nDo NOT re-read files you already read. Use the information you have."}
-                ] + messages[-56:]
-
-            # Phase forcing after enough research
-            research_count = sum(1 for t in tool_history[-5:] if t == "web_search")
-            if research_count >= 3 and phase == "research":
-                print(f"  ⚠️ 3+ searches done - moving to code phase")
-                phase = "code"
-                messages.append({
-                    "role": "user",
-                    "content": "You've done enough research. Now write Python code to implement what you learned. Use run_python.",
-                })
+            # Token-aware context management
+            max_ctx = self.config_model.context_window - self.config_model.max_tokens - 512
+            while len(messages) > 4:
+                # Estimate tokens: ~4 chars per token
+                est_tokens = sum(len(m.get("content", "")) for m in messages) // 4
+                if est_tokens <= max_ctx:
+                    break
+                # Compress oldest non-system message
+                if len(messages[1].get("content", "")) > 400:
+                    old = messages[1]["content"]
+                    messages[1]["content"] = old[:150] + "\n...[truncated]...\n" + old[-150:]
+                else:
+                    messages.pop(1)
 
             # Force save phase after enough code runs
             code_count = sum(1 for t in tool_history[-6:] if t == "run_python")
