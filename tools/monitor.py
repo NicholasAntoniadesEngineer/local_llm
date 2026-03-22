@@ -348,7 +348,7 @@ def build_dashboard() -> Layout:
     model_table.add_row("Name", model.get("short_name", "—"))
     model_table.add_row("Full ID", model.get("name", "—"))
     model_table.add_row("Profile", model.get("profile", "—"))
-    model_table.add_row("Disk Cache", f"{model.get('disk_size_gb', '?')} GB")
+    model_table.add_row("Model Size", f"{model.get('model_size_gb', '?')} GB")
     model_table.add_row("Context", f"{model.get('context_window', 0):,} tokens")
     model_table.add_row("Max Tokens", f"{model.get('max_tokens', 0):,} tokens")
 
