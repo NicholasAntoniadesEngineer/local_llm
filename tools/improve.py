@@ -217,7 +217,7 @@ def validate_output(filepath: str) -> tuple[bool, str]:
         return False, f"Error: {e}"
 
 
-def run_cycle(cycle_num: int) -> bool:
+def run_cycle(cycle_num: int, agent=None) -> bool:
     """Run one self-aware improvement cycle: build new OR upgrade weak."""
     history = load_history()
 
@@ -257,8 +257,11 @@ def run_cycle(cycle_num: int) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        model = os.environ.get("AGENT_MODEL", "tool_calling")
-        agent = MLXAgent(config_model_name=model, goal=f"Build: {skill['name']}")
+        if agent is None:
+            model_name = os.environ.get("AGENT_MODEL", "tool_calling")
+            agent = MLXAgent(config_model_name=model_name, goal=f"Build: {skill['name']}")
+        else:
+            agent.reset_for_new_task(f"Build: {skill['name']}")
         agent.run_loop(goal_text)
     except KeyboardInterrupt:
         raise
@@ -333,11 +336,15 @@ def main():
     cycle_num = int(sys.argv[1])
     loop_mode = "--loop" in sys.argv
 
+    # Pre-load model ONCE for all cycles (saves 5-10s per cycle)
+    model_name = os.environ.get("AGENT_MODEL", "tool_calling")
+    persistent_agent = MLXAgent(config_model_name=model_name, goal="init") if loop_mode else None
+
     if loop_mode:
         current = cycle_num
         while True:
             try:
-                ok = run_cycle(current)
+                ok = run_cycle(current, agent=persistent_agent)
                 h = load_history()
                 rate = h["total_passed"] / max(1, h["total_passed"] + h["total_failed"])
                 print(f"\n📊 Overall: {h['total_passed']} passed, {h['total_failed']} failed ({rate:.0%} success rate)")

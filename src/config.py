@@ -32,7 +32,7 @@ CONFIG = AgentConfig(
         "balanced": ModelConfig(
             name="mlx-community/Qwen3-30B-A3B-4bit",
             max_tokens=4096,
-            context_window=32_768,
+            context_window=12_288,  # 12K safe limit for 36GB M4 Max (prevents Metal OOM)
         ),
         "quality": ModelConfig(
             name="mlx-community/Qwen3-32B-4bit",

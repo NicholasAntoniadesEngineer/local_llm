@@ -171,6 +171,30 @@ class MLXAgent:
             print(f"❌ Failed to load model: {e}")
             sys.exit(1)
 
+    def reset_for_new_task(self, goal: str):
+        """Reset session state for a new task WITHOUT reloading the model.
+
+        Keeps: model, tokenizer, sampler, prompt_cache (expensive to create)
+        Resets: memory, perf counters, logger, goal
+        """
+        self.goal = goal
+        self.memory_manager = MemoryManager(goal)
+        self.logger = AgentLogger(goal)
+        self._perf = {
+            "step_times": [],
+            "tool_calls": [],
+            "peak_tok_s": 0.0,
+        }
+        self._search_cache = {}
+        # Recreate prompt cache for fresh KV state
+        try:
+            from mlx_lm.models.cache import make_prompt_cache
+            self._prompt_cache = make_prompt_cache(self.model)
+        except Exception:
+            pass
+        mx.clear_cache()
+        gc.collect()
+
     def _format_prompt(self, messages: list[dict], include_tools: bool = True) -> str:
         """Format messages using tokenizer's native chat template.
 
@@ -193,12 +217,65 @@ class MLXAgent:
                 add_generation_prompt=True,
             )
 
+    def _count_tokens(self, messages: list[dict]) -> int:
+        """Count actual tokens using the tokenizer (not estimates)."""
+        try:
+            prompt = self._format_prompt(messages)
+            return len(self.tokenizer.encode(prompt))
+        except Exception:
+            return sum(len(m.get("content", "")) for m in messages) // 4
+
+    def _compress_context(self, messages: list[dict]) -> list[dict]:
+        """Tiered context compression to prevent Metal GPU OOM.
+
+        Thresholds based on context_window:
+        - 40%: compress tool results to 500 chars
+        - 60%: collapse old exchanges to summaries
+        - 80%: keep only system + last 2 exchanges
+        """
+        budget = self.config_model.context_window - self.config_model.max_tokens - 1024
+        tokens = self._count_tokens(messages)
+        fill_pct = tokens / budget if budget > 0 else 1.0
+
+        if fill_pct < 0.4 or len(messages) <= 4:
+            return messages
+
+        # 40-60%: compress tool results in older messages
+        if fill_pct < 0.6:
+            for i in range(1, len(messages) - 4):
+                content = messages[i].get("content", "")
+                if messages[i].get("role") == "tool" and len(content) > 500:
+                    messages[i]["content"] = content[:250] + "\n...[compressed]...\n" + content[-250:]
+            return messages
+
+        # 60-80%: collapse all but last 3 exchanges into summary
+        if fill_pct < 0.8:
+            if len(messages) > 6:
+                summary_parts = []
+                for m in messages[1:-6]:
+                    role = m.get("role", "?")
+                    content = m.get("content", "")[:80]
+                    summary_parts.append(f"[{role}] {content}")
+                summary = "Previous context:\n" + "\n".join(summary_parts[-10:])
+                messages = [messages[0], {"role": "user", "content": summary}] + messages[-6:]
+            return messages
+
+        # 80%+: aggressive - keep only system + last 2 exchanges
+        if len(messages) > 4:
+            messages = [messages[0]] + messages[-4:]
+        return messages
+
     def _generate_response(self, messages: list[dict]) -> str:
         """Generate a response with all MLX optimizations + performance tracking."""
         import time as _time
+
+        # Clear GPU memory BEFORE generation to prevent Metal OOM
+        mx.clear_cache()
+        gc.collect()
+
         prompt = self._format_prompt(messages)
 
-        # Count prompt tokens
+        # Count prompt tokens (real count, not estimate)
         prompt_tokens = len(self.tokenizer.encode(prompt)) if hasattr(self.tokenizer, 'encode') else len(prompt) // 4
 
         try:
@@ -784,19 +861,8 @@ class MLXAgent:
                 max_result = min(4000, self.config_model.context_window // 4)
                 messages.append({"role": "tool", "content": result[:max_result]})
 
-            # Token-aware context management
-            max_ctx = self.config_model.context_window - self.config_model.max_tokens - 512
-            while len(messages) > 4:
-                # Estimate tokens: ~4 chars per token
-                est_tokens = sum(len(m.get("content", "")) for m in messages) // 4
-                if est_tokens <= max_ctx:
-                    break
-                # Compress oldest non-system message
-                if len(messages[1].get("content", "")) > 400:
-                    old = messages[1]["content"]
-                    messages[1]["content"] = old[:150] + "\n...[truncated]...\n" + old[-150:]
-                else:
-                    messages.pop(1)
+            # Tiered context compression (prevents Metal GPU OOM)
+            messages = self._compress_context(messages)
 
             # Force save phase after enough code runs (count from messages)
             recent_tools = [m.get("content", "")[:20] for m in messages[-12:] if m.get("role") == "assistant"]
