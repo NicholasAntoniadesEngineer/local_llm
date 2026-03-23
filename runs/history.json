@@ -489,8 +489,15 @@
       "passed": false,
       "reason": "Too few functions (1). Need \u22653 for production quality.",
       "timestamp": "2026-03-23T11:04:32.271309"
+    },
+    {
+      "cycle": 1,
+      "target": "unknown",
+      "passed": false,
+      "reason": "[Errno 2] No such file or directory: '/Users/nicholasantoniades/Documents/GitHub/local_llm/runs/Buil",
+      "timestamp": "2026-03-23T11:26:26.877975"
     }
   ],
   "total_passed": 18,
-  "total_failed": 52
+  "total_failed": 53
 }

@@ -162,3 +162,50 @@ class AgentLogger:
             "passed": passed,
             "reason": reason,
         })
+
+    def write_summary(self, perf: dict, result: dict):
+        """Write a human-readable run_summary.json at end of run."""
+        total_tokens = perf.get("total_tokens", 0)
+        total_time = perf.get("total_gen_time", 0.01)
+        prompt_tokens = perf.get("prompt_tokens", 0)
+        tool_total = perf["tool_success"]["total"]
+        tool_ok = perf["tool_success"]["success"]
+        steps = len(perf.get("step_times", []))
+
+        # GPU utilization from resources.jsonl
+        gpu_busy_pct = 0
+        try:
+            res_file = self.run_dir / "resources.jsonl"
+            if res_file.exists():
+                lines = res_file.read_text().strip().split("\n")
+                total_samples = len(lines)
+                busy = sum(1 for l in lines if '"GENERATING"' in l or '"PREFILL' in l)
+                gpu_busy_pct = round(busy / max(1, total_samples) * 100)
+        except Exception:
+            pass
+
+        summary = {
+            "run_id": self.run_id,
+            "run_dir": str(self.run_dir),
+            "started": datetime.fromtimestamp(self.start_time).isoformat(),
+            "duration_s": round(time.time() - self.start_time, 1),
+            "steps": steps,
+            "result": result,
+            "tokens": {
+                "generated": total_tokens,
+                "prompt": prompt_tokens,
+                "total": total_tokens + prompt_tokens,
+            },
+            "performance": {
+                "avg_tok_s": round(total_tokens / max(0.01, total_time), 1),
+                "peak_tok_s": perf.get("peak_tok_s", 0),
+                "avg_step_s": round(total_time / max(1, steps), 1),
+                "gpu_busy_pct": gpu_busy_pct,
+            },
+            "tools": {
+                "total_calls": tool_total,
+                "success_rate": round(tool_ok / max(1, tool_total) * 100, 0),
+            },
+        }
+        with open(self.run_dir / "run_summary.json", "w") as f:
+            json.dump(summary, f, indent=2)

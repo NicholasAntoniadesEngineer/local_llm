@@ -1172,6 +1172,16 @@ class MLXAgent:
         print(f"\n📊 Performance: {avg_tok_s:.0f} tok/s avg | {p['total_tokens']} tokens | {success_rate:.0%} tool success | {avg_step:.1f}s/step")
         print("🛑 Session complete.")
 
+        # Write per-run summary with all stats
+        try:
+            self.logger.write_summary(self._perf, {
+                "completed": step >= 3,
+                "steps_used": step,
+                "max_steps": CONFIG.max_iterations,
+            })
+        except Exception:
+            pass
+
         # Stop resource sampler
         _sampler_stop.set()
         _sampler_thread.join(timeout=2)
