@@ -8,6 +8,10 @@ class ResultEvaluator:
         self.search_cache = SearchCache()
 
     def score_search_result(self, query: str, title: str, snippet: str) -> float:
+        """Evaluate the relevance of a search result based on query, title, and snippet."""
+        if not all([query, title, snippet]):
+            raise ValueError("All parameters (query, title, snippet) must be provided.")
+
         # Check if this result is in the search cache
         cached = self.search_cache.get(f"{query}_{title}")
         if cached:
@@ -32,29 +36,37 @@ class ResultEvaluator:
         return score
 
     def _text_similarity(self, a: str, b: str) -> float:
-        # Use difflib to calculate text similarity
+        """Calculate text similarity using difflib."""
         return difflib.SequenceMatcher(None, a, b).ratio()
 
     def score_code_output(self, code: str, output: str, has_error: bool) -> float:
+        """Evaluate the quality of code output based on error status."""
+        if not all([code, output]):
+            raise ValueError("All parameters (code, output) must be provided.")
+
         if has_error:
             return 0.0  # Code with errors is not useful
-        
+
         # Check if output matches expected pattern
         # For simplicity, we'll assume code that produces output is good
         # In a real system, we would check against expected results
         return 1.0  # Assume code is good if it runs without errors
 
     def is_duplicate(self, new_result: str, previous_results: List[str]) -> bool:
-        # Check if new_result is a duplicate of any previous result
+        """Check if new_result is a duplicate of any previous result."""
+        if not previous_results:
+            return False
+
         for prev in previous_results:
             if self._text_similarity(new_result, prev) > 0.9:
                 return True
         return False
 
     def summarize_quality(self, scores_list: List[float]) -> Dict[str, float]:
+        """Summarize the quality of a list of scores."""
         if not scores_list:
             return {'avg': 0.0, 'min': 0.0, 'max': 0.0, 'assessment': 'No results to evaluate'}
-        
+
         avg = sum(scores_list) / len(scores_list)
         min_score = min(scores_list)
         max_score = max(scores_list)

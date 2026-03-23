@@ -218,6 +218,10 @@ def get_perf() -> dict:
                     "peak_tok_s": data.get("peak_tok_s", "?"),
                     "context_fill_pct": data.get("context_pct", 0),
                     "gb_per_sec": round(data.get("bandwidth_used_gbs", 0), 1),
+                    "status": data.get("status", "GENERATING" if data.get("generating") else "idle"),
+                    "step": data.get("step", "?"),
+                    "prompt_tokens": data.get("prompt_tokens", 0),
+                    "gen_tokens": data.get("gen_tokens", 0),
                 }
             except Exception:
                 pass
@@ -407,8 +411,13 @@ def build_dashboard() -> Layout:
     perf_table = Table(title="Performance", expand=False, box=box.ROUNDED, padding=(0, 1))
     perf_table.add_column("", style="cyan", width=14, no_wrap=True)
     perf_table.add_column("", style="green", max_width=20)
-    perf_table.add_row("Tokens/s", f"{perf.get('tokens_per_sec', '?')}")
-    perf_table.add_row("Peak Tokens/s", f"{perf.get('peak_tok_s', '?')}")
+    status = perf.get('status', '—')
+    perf_table.add_row("Status", f"[bold yellow]{status}[/]" if "PREFILL" in str(status) else f"{status}")
+    perf_table.add_row("Step", f"{perf.get('step', '—')}")
+    perf_table.add_row("Decode tok/s", f"{perf.get('tokens_per_sec', '?')}")
+    perf_table.add_row("Peak tok/s", f"{perf.get('peak_tok_s', '?')}")
+    perf_table.add_row("Prompt tokens", f"{perf.get('prompt_tokens', '—')}")
+    perf_table.add_row("Gen tokens", f"{perf.get('gen_tokens', '—')}")
     perf_table.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
     perf_table.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
 

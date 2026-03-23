@@ -394,6 +394,9 @@ class MLXAgent:
         # Count prompt tokens (real count, not estimate)
         prompt_tokens = len(self.tokenizer.encode(prompt)) if hasattr(self.tokenizer, 'encode') else len(prompt) // 4
 
+        # Write PREFILLING status so monitor shows activity during the silent prefill phase
+        self._write_status(f"PREFILLING {prompt_tokens} tokens...", generating=True)
+
         try:
             t0 = _time.perf_counter()
 
@@ -894,6 +897,7 @@ class MLXAgent:
 
         phase = "research"
         consecutive_no_tool = 0
+        consecutive_stuck = 0  # Hard escape after 3 consecutive stuck detections
         # Content-hash loop detection: catches write→test→write→test oscillation
         _seen_writes: dict[str, int] = {}   # hash(content) → count
         _seen_errors: dict[str, int] = {}   # hash(error[:200]) → count
@@ -1022,18 +1026,25 @@ class MLXAgent:
                         print(f"  🔄 STUCK: same error {_seen_errors[h]}x")
 
                 if _stuck:
-                    self.logger.loop_detected(step, name, 2)
+                    consecutive_stuck += 1
+                    self.logger.loop_detected(step, name, consecutive_stuck)
+
+                    if consecutive_stuck >= 3:
+                        # HARD ESCAPE: 3 stuck in a row = abort this cycle
+                        print(f"  💀 HARD ESCAPE: stuck {consecutive_stuck}x, aborting cycle")
+                        break
+
                     messages.append({"role": "user", "content": (
-                        f"STOP. You are stuck in a loop - writing the same code or hitting the same error repeatedly.\n"
-                        f"LATEST ERROR: {result[:400]}\n\n"
-                        f"You MUST take a COMPLETELY DIFFERENT approach:\n"
-                        f"1. Do NOT write the same code again\n"
-                        f"2. Simplify drastically - remove complex imports, use only stdlib\n"
-                        f"3. If importing from other skills fails, write standalone code instead\n"
-                        f"4. Make the simplest possible version that passes tests"
+                        f"STOP. You are stuck in a loop ({consecutive_stuck}/3 before abort).\n"
+                        f"LATEST RESULT: {result[:300]}\n\n"
+                        f"CHANGE YOUR APPROACH COMPLETELY. If importing fails, use only stdlib. "
+                        f"If testing fails, read the error and fix the specific line. "
+                        f"Do NOT repeat the same tool call."
                     )})
                     _seen_writes.clear()
                     _seen_errors.clear()
+                else:
+                    consecutive_stuck = 0
 
                 # Phase transitions
                 if name == "web_search":
