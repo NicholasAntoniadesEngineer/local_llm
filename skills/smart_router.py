@@ -1,5 +1,5 @@
 import difflib
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 import json
 from confidence_scorer import ConfidenceScorer
 from loop_detector import LoopDetector
@@ -12,18 +12,8 @@ class SmartRouter:
         self.task_planner = TaskPlanner("Implement a Smart Tool Router")
         self.current_phase = 'research'
         
-    def pick_tool(self, knowledge: float, capability: float, progress: float) -> Optional[str]:
-        """Determine the optimal tool based on the current state.\n\n        Args:
-            knowledge: Confidence score for knowledge (0-1)
-            capability: Confidence score for capability (0-1)
-            progress: Confidence score for progress (0-1)
-\n        Returns:
-            Optional[str]: The selected tool or None if abort is needed
-        """
-        
-        if not all(isinstance(x, (int, float)) for x in [knowledge, capability, progress]):
-            raise ValueError("All inputs must be numeric")
-        
+    def pick_tool(self, knowledge, capability, progress):
+        # Determine the optimal tool based on the current state
         action = self.confidence_scorer.should_act(knowledge, capability, progress)
         
         if action == 'research':
@@ -35,18 +25,8 @@ class SmartRouter:
         else:  # 'code'
             return 'write_file'
 
-    def should_change_phase(self, knowledge: float, capability: float, progress: float) -> bool:
-        """Determine if we should change phases based on the current state.\n\n        Args:
-            knowledge: Confidence score for knowledge (0-1)
-            capability: Confidence score for capability (0-1)
-            progress: Confidence score for progress (0-1)
-\n        Returns:
-            bool: True if phase should change, False otherwise
-        """
-        
-        if not all(isinstance(x, (int, float)) for x in [knowledge, capability, progress]):
-            raise ValueError("All inputs must be numeric")
-        
+    def should_change_phase(self, knowledge, capability, progress):
+        # Determine if we should change phases based on the current state
         action = self.confidence_scorer.should_act(knowledge, capability, progress)
         
         if action == 'research':
@@ -58,29 +38,20 @@ class SmartRouter:
         else:  # 'code'
             return self.current_phase != 'code'
 
-    def format_tool_prompt(self, tool: str, args: Dict[str, Any]) -> str:
-        """Format the tool prompt based on the tool and arguments.\n\n        Args:
-            tool: The name of the tool to use
-            args: Dictionary of arguments for the tool
-\n        Returns:
-            str: Formatted prompt for the tool
-        """
-        
-        if not isinstance(tool, str) or not isinstance(args, dict):
-            raise ValueError("Tool must be a string and args must be a dictionary")
-        
+    def format_tool_prompt(self, tool, args):
+        # Format the tool prompt based on the tool and arguments
         if tool == 'web_search':
-            return f"Perform a web search with query: {args['query']}",
+            return f"Perform a web search with query: {args['query']}."
         elif tool == 'write_file':
-            return f"Write content to file: {args['path']}",
+            return f"Write content to file: {args['path']}."
         elif tool == 'read_file':
-            return f"Read content from file: {args['path']}",
+            return f"Read content from file: {args['path']}."
         elif tool == 'run_python':
-            return f"Run Python code: {args['code']}",
+            return f"Run Python code: {args['code']}."
         elif tool == 'bash':
-            return f"Execute shell command: {args['cmd']}",
+            return f"Execute shell command: {args['cmd']}."
         else:
-            return f"Use tool: {tool} with arguments: {args}"
+            return f"Use tool: {tool} with arguments: {args}."
 
 if __name__ == "__main__":
     router = SmartRouter()

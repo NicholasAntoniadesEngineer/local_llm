@@ -265,6 +265,13 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
     output_dir = Path("./skills")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Backup existing file before upgrade (restore if upgrade breaks it)
+    target_file_path = output_dir / skill["file"]
+    backup_path = target_file_path.with_suffix(".py.bak")
+    if target_file_path.exists():
+        import shutil
+        shutil.copy2(target_file_path, backup_path)
+
     try:
         if agent is None:
             model_name = os.environ.get("AGENT_MODEL", "tool_calling")
@@ -311,6 +318,9 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
     if ok:
         print(f"✅ PASSED: {target_name} - {msg}")
         tree.mark_completed(skill["id"], msg)
+        # Remove backup on success
+        if backup_path.exists():
+            backup_path.unlink()
         history["cycles"].append({
             "cycle": cycle_num, "target": target_name, "passed": True,
             "reason": msg[:100], "timestamp": datetime.now().isoformat(),
@@ -319,7 +329,12 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
     else:
         print(f"❌ FAILED: {target_name} - {msg}")
         tree.mark_failed(skill["id"], msg)
-        if Path(target_file).exists():
+        # Restore backup if upgrade broke a working file
+        if backup_path.exists():
+            import shutil
+            shutil.copy2(backup_path, target_file_path)
+            print(f"🔄 Restored backup: {target_name}")
+        elif Path(target_file).exists():
             Path(target_file).unlink()
             print(f"🗑️  Deleted: {target_name}")
         history["cycles"].append({
