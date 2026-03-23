@@ -1,8 +1,6 @@
 import difflib
 from typing import List, Tuple, Optional
 import json
-from src.memory import SessionMemory
-from src.config import AgentConfig
 
 class LoopDetector:
     def __init__(self):
