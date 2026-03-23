@@ -705,7 +705,12 @@ class MLXAgent:
                 return f"File not found: {path}"
             text = p.read_text()
             if old_content not in text:
-                return f"old_content not found in {path}. Read the file first to get the exact text."
+                preview = text[:300].replace('\n', '\\n')
+                return (
+                    f"old_content not found in {path}. "
+                    f"TIP: Use write_file to rewrite the whole file instead. "
+                    f"File starts with: {preview}"
+                )
             new_text = text.replace(old_content, new_content, 1)
             p.write_text(new_text)
             return f"Edited {path}: replaced {len(old_content)} chars with {len(new_content)} chars"
@@ -1092,6 +1097,18 @@ class MLXAgent:
                         _stuck = True
                         escape = _loop_detector.suggest_escape(name)
                         print(f"  🔄 STUCK (skill-detected): {escape or 'try different approach'}")
+
+                # edit_file failure detection (catches read→edit→read→edit loops)
+                if not _stuck and name == "edit_file" and not success:
+                    _seen_errors["edit_fail"] = _seen_errors.get("edit_fail", 0) + 1
+                    if _seen_errors["edit_fail"] >= 2:
+                        _stuck = True
+                        print(f"  🔄 STUCK: edit_file failed {_seen_errors['edit_fail']}x → forcing write_file")
+                        messages.append({"role": "user", "content":
+                            "edit_file keeps failing because the content doesn't match. "
+                            "Use write_file to REWRITE the complete file instead."})
+                elif name != "edit_file":
+                    _seen_errors.pop("edit_fail", None)
 
                 # Hash-based fallback
                 if not _stuck and name == "write_file" and success:
