@@ -132,8 +132,127 @@
       "passed": true,
       "reason": "Tests passed (1,563B)",
       "timestamp": "2026-03-22T22:16:20.330463"
+    },
+    {
+      "cycle": 1,
+      "target": "task_planner.py",
+      "passed": false,
+      "reason": "Syntax error:   File \"skills/task_planner.py\", line 13\n    \"\"\"Decompose the goal into a list of task",
+      "timestamp": "2026-03-23T10:25:56.791079"
+    },
+    {
+      "cycle": 1,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:39:48.700660"
+    },
+    {
+      "cycle": 2,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:40:11.964769"
+    },
+    {
+      "cycle": 3,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:40:35.246049"
+    },
+    {
+      "cycle": 4,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:40:58.729367"
+    },
+    {
+      "cycle": 5,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:41:32.284746"
+    },
+    {
+      "cycle": 6,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:41:58.788429"
+    },
+    {
+      "cycle": 7,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:42:22.431590"
+    },
+    {
+      "cycle": 8,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:42:46.704920"
+    },
+    {
+      "cycle": 9,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:43:11.349092"
+    },
+    {
+      "cycle": 10,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:43:36.452380"
+    },
+    {
+      "cycle": 1,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:12.988858"
+    },
+    {
+      "cycle": 2,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:19.833203"
+    },
+    {
+      "cycle": 3,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:26.703172"
+    },
+    {
+      "cycle": 4,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:33.531784"
+    },
+    {
+      "cycle": 5,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:40.357502"
+    },
+    {
+      "cycle": 6,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:47.204892"
     }
   ],
   "total_passed": 16,
-  "total_failed": 3
+  "total_failed": 20
 }

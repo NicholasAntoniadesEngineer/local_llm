@@ -31,11 +31,17 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for information on any topic",
+            "description": (
+                "Search the web using DuckDuckGo. Returns titles, URLs, and snippets. "
+                "Use for: finding API docs, understanding libraries, researching algorithms. "
+                "Tips: Use specific technical queries like 'python difflib SequenceMatcher tutorial' "
+                "not vague ones like 'how to compare strings'. If results are poor, try different keywords. "
+                "Results are cached — identical queries return cached results instantly."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"}
+                    "query": {"type": "string", "description": "Specific technical search query (5-10 words)"}
                 },
                 "required": ["query"],
             },
@@ -45,11 +51,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "run_python",
-            "description": "Execute Python code and return output",
+            "description": (
+                "Execute Python code in a subprocess and return stdout/stderr. "
+                "The working directory is the project root. PYTHONPATH includes both '.' and 'skills/'. "
+                "Use for: testing code, running assertions, validating imports. "
+                "CRITICAL: If a test fails, READ the error traceback carefully. Do NOT rerun identical code. "
+                "Fix the specific line that failed, then test again. "
+                "Timeout: 30 seconds. For long operations, break into smaller steps."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string", "description": "Python code to execute"}
+                    "code": {"type": "string", "description": "Complete Python code to execute. Must be self-contained."}
                 },
                 "required": ["code"],
             },
@@ -59,11 +72,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read contents of a file",
+            "description": (
+                "Read the full contents of a file. Use to understand existing code before modifying it. "
+                "Paths are relative to project root: 'src/agent.py', 'skills/metrics.py', etc. "
+                "Always read a file before writing a replacement — understand the existing code first. "
+                "For large files, consider using grep_file to find specific sections instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path to read"}
+                    "path": {"type": "string", "description": "Relative file path from project root"}
                 },
                 "required": ["path"],
             },
@@ -73,12 +91,23 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "Write content to a file",
+            "description": (
+                "Write COMPLETE file content. This OVERWRITES the entire file. "
+                "For skill modules in skills/: "
+                "1. Include ALL imports at the top. Use 'from module_name import ClassName' for prereqs. "
+                "   NEVER use 'from src.memory import' or 'from src.config import' — skills run standalone. "
+                "2. Write COMPLETE class with all methods. Each method must have real logic (10+ lines), "
+                "   not single-line returns or forwarding wrappers. "
+                "3. Include 'if __name__ == \"__main__\":' test block with 5+ assert statements. "
+                "4. Tests must print 'ALL TESTS PASSED' only if every assertion succeeds. "
+                "5. Handle edge cases: empty input, None values, boundary conditions. "
+                "For small changes to existing files, prefer edit_file instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path to write"},
-                    "content": {"type": "string", "description": "Content to write"},
+                    "path": {"type": "string", "description": "File path. For skills use just the filename like 'metrics.py'"},
+                    "content": {"type": "string", "description": "Complete file content including all imports, classes, and test block"},
                 },
                 "required": ["path", "content"],
             },
@@ -87,12 +116,75 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "bash",
-            "description": "Execute a shell command",
+            "name": "edit_file",
+            "description": (
+                "Make a targeted edit to an existing file by replacing a specific string. "
+                "Finds old_content in the file and replaces it with new_content. "
+                "Use instead of write_file when you only need to change a few lines. "
+                "The old_content must match EXACTLY (including whitespace). "
+                "If old_content is not found, the edit fails with an error."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cmd": {"type": "string", "description": "Shell command to run"}
+                    "path": {"type": "string", "description": "File path to edit"},
+                    "old_content": {"type": "string", "description": "Exact string to find and replace"},
+                    "new_content": {"type": "string", "description": "Replacement string"},
+                },
+                "required": ["path", "old_content", "new_content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_file",
+            "description": (
+                "Search for a pattern in files. Returns matching lines with line numbers. "
+                "Use to find specific code patterns, function definitions, imports, or usages "
+                "without reading entire files. Much cheaper than read_file for large files. "
+                "Searches recursively in directories. Pattern is a Python regex."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                    "path": {"type": "string", "description": "File or directory to search in. Default: 'skills/'"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_dir",
+            "description": (
+                "List files in a directory with sizes. Returns compact output: 'filename (size)' per line. "
+                "Use to understand project structure before reading specific files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory path. Default: '.'"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": (
+                "Execute a shell command and return output. Use for: git operations, "
+                "installing packages, running system commands. "
+                "Timeout: 30 seconds. Avoid long-running commands."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cmd": {"type": "string", "description": "Shell command to execute"}
                 },
                 "required": ["cmd"],
             },
@@ -504,6 +596,65 @@ class MLXAgent:
 
     # ── Tool implementations ──────────────────────────────────────────────
 
+    def _edit_file(self, path: str, old_content: str, new_content: str) -> str:
+        """Structured file edit — find and replace a specific string."""
+        try:
+            p = Path(path)
+            if not p.exists():
+                # Try in skills/
+                p = CONFIG.output_dir / path
+            if not p.exists():
+                return f"File not found: {path}"
+            text = p.read_text()
+            if old_content not in text:
+                return f"old_content not found in {path}. Read the file first to get the exact text."
+            new_text = text.replace(old_content, new_content, 1)
+            p.write_text(new_text)
+            return f"Edited {path}: replaced {len(old_content)} chars with {len(new_content)} chars"
+        except Exception as e:
+            return f"Edit failed: {e}"
+
+    def _grep_file(self, pattern: str, path: str = "skills/") -> str:
+        """Search for a regex pattern in files."""
+        import re as _re
+        try:
+            results = []
+            p = Path(path)
+            files = [p] if p.is_file() else sorted(p.rglob("*.py"))
+            for f in files[:20]:
+                try:
+                    for i, line in enumerate(f.read_text().splitlines(), 1):
+                        if _re.search(pattern, line):
+                            results.append(f"{f}:{i}: {line.strip()}")
+                            if len(results) >= 20:
+                                break
+                except Exception:
+                    continue
+                if len(results) >= 20:
+                    break
+            return "\n".join(results) if results else f"No matches for '{pattern}' in {path}"
+        except Exception as e:
+            return f"Grep failed: {e}"
+
+    def _list_dir(self, path: str = ".") -> str:
+        """List directory contents with sizes."""
+        try:
+            p = Path(path)
+            if not p.is_dir():
+                return f"Not a directory: {path}"
+            entries = []
+            for f in sorted(p.iterdir()):
+                if f.name.startswith(".") or f.name == "__pycache__":
+                    continue
+                if f.is_file():
+                    size = f.stat().st_size
+                    entries.append(f"{f.name} ({size:,}B)")
+                elif f.is_dir():
+                    entries.append(f"{f.name}/")
+            return "\n".join(entries) if entries else "(empty)"
+        except Exception as e:
+            return f"List failed: {e}"
+
     def execute_tool(self, name: str, args: dict) -> str:
         """Route and execute a tool call."""
         dispatch = {
@@ -515,6 +666,11 @@ class MLXAgent:
                 a.get("path") or a.get("file_path") or a.get("file_name", ""),
                 a.get("content", ""),
             ),
+            "edit_file": lambda a: self._edit_file(
+                a.get("path", ""), a.get("old_content", ""), a.get("new_content", ""),
+            ),
+            "grep_file": lambda a: self._grep_file(a.get("pattern", ""), a.get("path", "skills/")),
+            "list_dir": lambda a: self._list_dir(a.get("path", ".")),
         }
         handler = dispatch.get(name)
         if not handler:
@@ -698,21 +854,11 @@ class MLXAgent:
 
         system_msg = (
             f"/nothink\n"
-            f"You are an autonomous agent. Your goal: {goal}\n\n"
-            f"DECISION FRAMEWORK - Before each action, ask yourself:\n"
-            f"1. Do I KNOW enough to write the code? If yes -> write_file or run_python\n"
-            f"2. Do I need to READ a file to understand something? If yes -> read_file\n"
-            f"3. Is my code WORKING? If no -> fix the specific error shown in the result\n"
-            f"4. Is my code TESTED and passing? If yes -> say DONE\n\n"
-            f"RULES:\n"
-            f"- Do NOT search the web. You already know how to write Python.\n"
-            f"- After reading files, write code IMMEDIATELY. Don't over-research.\n"
-            f"- When a test fails, read the ERROR MESSAGE and fix that SPECIFIC bug.\n"
-            f"- Don't rewrite the same code if it failed. Change the broken part only.\n"
-            f"- When testing, do NOT import agent.py or load MLX models (too slow).\n"
-            f"- Include 'ALL TESTS PASSED' print in your test block.\n"
-            f"- Call ONE tool per response.\n"
-            f"- When tests pass, say DONE."
+            f"You are an autonomous coding agent. Goal: {goal}\n\n"
+            f"Work naturally: read code to understand, write code to build, test to verify. "
+            f"Use grep_file and list_dir to explore efficiently. Use edit_file for small changes. "
+            f"Fix errors by reading the traceback and changing the broken line — never rerun identical code. "
+            f"Do NOT import agent.py or load MLX models in tests. Say DONE when tests pass."
         )
 
         messages = [
