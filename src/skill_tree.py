@@ -282,16 +282,47 @@ class SkillTree:
         current_code = fpath.read_text() if fpath.exists() else "(file missing)"
         prereq_code = self._prereq_code(skill)
 
+        # Analyze current code to give specific feedback
+        import ast as _ast
+        try:
+            tree = _ast.parse(current_code)
+            func_count = sum(1 for n in _ast.walk(tree) if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef)))
+            class_count = sum(1 for n in _ast.walk(tree) if isinstance(n, _ast.ClassDef))
+        except Exception:
+            func_count = class_count = 0
+        assert_count = current_code.count("assert ")
+        loc = len(current_code.splitlines())
+
+        specific_issues = []
+        if func_count < 3:
+            specific_issues.append(f"Only {func_count} functions — need ≥3 to pass validation")
+        if assert_count < 5:
+            specific_issues.append(f"Only {assert_count} assertions — need ≥5 to pass validation")
+        if loc < 80:
+            specific_issues.append(f"Only {loc} lines — too shallow for production quality")
+        if class_count == 0:
+            specific_issues.append("No class defined — should use a class for encapsulation")
+        if "from src." in current_code:
+            specific_issues.append("Contains 'from src.' imports — skills must be standalone")
+
+        issues_text = "\n".join(f"- {i}" for i in specific_issues) if specific_issues else "- No specific structural issues (focus on algorithmic depth)"
+
         return f"""You are UPGRADING an existing module to production quality. The current version works but is weak.
 
 === CURRENT CODE (upgrade this) ===
 {current_code}
 
-=== PROBLEMS WITH CURRENT VERSION ===
-- May have shallow implementations (1-line methods that just return constants)
-- May lack proper error handling and edge cases
-- May have weak or missing test assertions
-- May not use prereq modules effectively
+=== CURRENT METRICS ===
+Functions: {func_count} | Assertions: {assert_count} | Lines: {loc} | Classes: {class_count}
+
+=== SPECIFIC ISSUES TO FIX ===
+{issues_text}
+
+=== VALIDATION GATE (your code MUST pass these or it gets deleted) ===
+1. MINIMUM 3 functions or methods
+2. MINIMUM 5 assert statements in the test block
+3. No 'from src.' imports
+4. Must print 'ALL TESTS PASSED'
 
 === UPGRADE REQUIREMENTS ===
 1. Keep the same class name and method signatures (don't break API)

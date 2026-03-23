@@ -54,6 +54,43 @@ class SessionMemory:
         return SessionMemory(**data)
 
 
+    @staticmethod
+    def retrieve_relevant(goal: str, session_dir: Path = None, n: int = 3) -> list[dict]:
+        """Find past sessions with similar goals and extract their learnings.
+
+        Returns list of dicts with: goal, successes, failures, key_learning
+        """
+        if session_dir is None:
+            session_dir = Path.home() / ".claude" / "sessions"
+        if not session_dir.exists():
+            return []
+
+        goal_words = set(goal.lower().split())
+        scored = []
+
+        for f in sorted(session_dir.glob("session_*.json"), reverse=True)[:50]:
+            try:
+                data = json.loads(f.read_text())
+                past_goal = data.get("goal", "")
+                past_words = set(past_goal.lower().split())
+                # Jaccard similarity
+                overlap = len(goal_words & past_words)
+                union = len(goal_words | past_words)
+                sim = overlap / max(1, union)
+                if sim > 0.15:
+                    scored.append((sim, {
+                        "goal": past_goal,
+                        "successes": [s.get("approach", "")[:80] for s in data.get("successes", [])[:3]],
+                        "failures": [f.get("reason", "")[:80] for f in data.get("failures", [])[:3]],
+                        "tools_used": len(data.get("iterations", [])),
+                    }))
+            except Exception:
+                continue
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [s[1] for s in scored[:n]]
+
+
 class MemoryManager:
     """Manages session memory with auto-save."""
 

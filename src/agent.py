@@ -404,6 +404,34 @@ class MLXAgent:
         except Exception:
             pass
 
+    def _pre_validate(self, path: str) -> str:
+        """Quick AST validation during idle time. Returns 'OK' or 'WARN: ...'."""
+        import ast
+        try:
+            p = Path(path)
+            if not p.exists():
+                p = CONFIG.output_dir / path
+            if not p.exists():
+                return "OK"
+            source = p.read_text()
+            tree = ast.parse(source)
+            func_count = sum(1 for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+            assert_count = source.count("assert ")
+            warnings = []
+            if func_count < 3:
+                warnings.append(f"only {func_count} functions (need ≥3)")
+            if assert_count < 5:
+                warnings.append(f"only {assert_count} asserts (need ≥5)")
+            if "from src." in source:
+                warnings.append("contains 'from src.' imports (forbidden in skills)")
+            if warnings:
+                return "WARN: " + "; ".join(warnings)
+            return "OK"
+        except SyntaxError as e:
+            return f"WARN: syntax error at line {e.lineno}: {e.msg}"
+        except Exception:
+            return "OK"
+
     def _count_tokens(self, messages: list[dict]) -> int:
         """Count actual tokens using the tokenizer (not estimates)."""
         try:
@@ -960,13 +988,42 @@ class MLXAgent:
             "max_iterations": CONFIG.max_iterations,
         })
 
+        # Retrieve learnings from similar past sessions
+        past_lessons = ""
+        try:
+            from src.memory import SessionMemory
+            relevant = SessionMemory.retrieve_relevant(goal)
+            if relevant:
+                lessons = []
+                for r in relevant[:2]:
+                    if r.get("failures"):
+                        lessons.append(f"Previously failed: {'; '.join(r['failures'][:2])}")
+                    if r.get("successes"):
+                        lessons.append(f"Previously succeeded: {'; '.join(r['successes'][:2])}")
+                if lessons:
+                    past_lessons = "\n\nLessons from past sessions:\n" + "\n".join(f"- {l}" for l in lessons)
+        except Exception:
+            pass
+
+        # Add variation seed to break KV cache determinism across cycles
+        import random
+        variation = random.choice([
+            "Start by reading the existing code before writing anything.",
+            "Think about edge cases before writing the implementation.",
+            "Write tests first, then implement to make them pass.",
+            "Look at similar existing skills for patterns to reuse.",
+            "Focus on the core algorithm first, then add error handling.",
+        ])
+
         system_msg = (
             f"/nothink\n"
             f"You are an autonomous coding agent. Goal: {goal}\n\n"
+            f"{variation}\n"
             f"Work naturally: read code to understand, write code to build, test to verify. "
             f"Use grep_file and list_dir to explore efficiently. Use edit_file for small changes. "
             f"Fix errors by reading the traceback and changing the broken line — never rerun identical code. "
             f"Do NOT import agent.py or load MLX models in tests. Say DONE when tests pass."
+            f"{past_lessons}"
         )
 
         messages = [
@@ -1071,6 +1128,18 @@ class MLXAgent:
                 print(f"  → {result_preview}")
                 success = not result.startswith("ERROR")
                 self.logger.tool_result(step, name, success, result_preview)
+
+                # Schedule idle work for next tool execution window
+                if name == "write_file" and success:
+                    # Pre-validate the written file (AST check) during next idle window
+                    written_path = args.get("path", "")
+                    self._idle_scheduler.enqueue("pre_validate", lambda p=written_path: self._pre_validate(p))
+
+                # Check for pre-validation results from previous idle window
+                pre_val = self._idle_scheduler.get_result("pre_validate")
+                if pre_val and pre_val.startswith("WARN:"):
+                    print(f"  ⚠️ Pre-validation: {pre_val}")
+                    messages.append({"role": "user", "content": f"WARNING from static analysis: {pre_val}"})
 
                 # Track in memory
                 success = not result.startswith("ERROR")
