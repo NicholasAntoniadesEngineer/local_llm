@@ -988,20 +988,16 @@ class MLXAgent:
             "max_iterations": CONFIG.max_iterations,
         })
 
-        # Retrieve learnings from similar past sessions
+        # Learn from past failures (read history.json directly — always works)
         past_lessons = ""
         try:
-            from src.memory import SessionMemory
-            relevant = SessionMemory.retrieve_relevant(goal)
-            if relevant:
-                lessons = []
-                for r in relevant[:2]:
-                    if r.get("failures"):
-                        lessons.append(f"Previously failed: {'; '.join(r['failures'][:2])}")
-                    if r.get("successes"):
-                        lessons.append(f"Previously succeeded: {'; '.join(r['successes'][:2])}")
-                if lessons:
-                    past_lessons = "\n\nLessons from past sessions:\n" + "\n".join(f"- {l}" for l in lessons)
+            hist_path = Path("run_output_data/history.json")
+            if hist_path.exists():
+                hist = json.loads(hist_path.read_text())
+                recent_fails = [c for c in hist.get("cycles", [])[-10:] if not c.get("passed")]
+                if recent_fails:
+                    fail_reasons = list(set(f.get("reason", "")[:80] for f in recent_fails[:5]))
+                    past_lessons = "\n\nRecent failures to avoid:\n" + "\n".join(f"- {r}" for r in fail_reasons[:3])
         except Exception:
             pass
 

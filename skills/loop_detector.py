@@ -1,5 +1,5 @@
 import difflib
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import json
 
 class LoopDetector:
@@ -7,14 +7,20 @@ class LoopDetector:
         self.actions = []  # Stores tuples of (tool, args_str, result_str)
         self.max_actions = 10  # Sliding window of last 10 actions
 
-    def record(self, tool: str, args_str: str, result_str: str):
+    def record(self, tool: str, args_str: str, result_str: str) -> None:
         """Add a new action to the sliding window"""
+        if not isinstance(tool, str) or not isinstance(args_str, str) or not isinstance(result_str, str):
+            raise ValueError("All parameters must be strings")
+        
         self.actions.append((tool, args_str, result_str))
         # Keep only the last max_actions items
         self.actions = self.actions[-self.max_actions:]
 
     def similarity(self, a: str, b: str) -> float:
         """Calculate similarity between two strings using difflib"""
+        if not isinstance(a, str) or not isinstance(b, str):
+            raise ValueError("Inputs must be strings")
+        
         return difflib.SequenceMatcher(None, a, b).ratio()
 
     def is_stuck(self) -> bool:
@@ -40,6 +46,9 @@ class LoopDetector:
 
     def suggest_escape(self, current_tool: str) -> Optional[str]:
         """Suggest a different tool/approach when stuck"""
+        if not isinstance(current_tool, str):
+            raise ValueError("current_tool must be a string")
+        
         if len(self.actions) < 3:
             return None
 
@@ -80,5 +89,37 @@ if __name__ == "__main__":
     detector.record("toolA", "args1", "result1 similar")
     detector.record("toolA", "args1", "result1 slightly different")
     assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
 
     print("ALL TESTS PASSED")

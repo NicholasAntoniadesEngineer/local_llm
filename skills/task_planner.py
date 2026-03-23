@@ -71,66 +71,32 @@ class TaskPlanner:
         if not isinstance(completed, list):
             raise TypeError("Completed must be a list")
 
+        completed_names = set()
+        for c in completed:
+            if isinstance(c, dict):
+                completed_names.add(c.get('task', ''))
+            elif isinstance(c, str):
+                completed_names.add(c)
+
         for task in self.decompose():
-            if task['task'] not in self.completed:
+            if task['task'] not in completed_names:
                 return task
         return None
 
     def is_complete(self, completed: List[Dict]) -> bool:
-        """Check if all tasks are completed.
-
-        Args:
-            completed: List of tasks that have been completed.
-
-        Returns:
-            True if all tasks are completed, False otherwise.
-        """
+        """Check if all tasks are completed."""
         if not isinstance(completed, list):
             raise TypeError("Completed must be a list")
 
-        return len(self.completed) == len(self.decompose())
+        completed_names = set()
+        for c in completed:
+            if isinstance(c, dict):
+                completed_names.add(c.get('task', ''))
+            elif isinstance(c, str):
+                completed_names.add(c)
 
-    def is_complete(self, completed: List[Dict]) -> bool:
-        """Check if all tasks are completed.
+        return all(t['task'] in completed_names for t in self.decompose())
 
-        Args:
-            completed: List of tasks that have been completed.
-
-        Returns:
-            True if all tasks are completed, False otherwise.
-        """
-        if not isinstance(completed, list):
-            raise TypeError("Completed must be a list")
-
-        return len(self.completed) == len(self.decompose())
-
-    def is_complete(self, completed: List[Dict]) -> bool:
-        """Check if all tasks are completed.
-
-        Args:
-            completed: List of tasks that have been completed.
-
-        Returns:
-            True if all tasks are completed, False otherwise.
-        """
-        if not isinstance(completed, list):
-            raise TypeError("Completed must be a list")
-
-        return len(self.completed) == len(self.decompose())
-
-    def is_complete(self, completed: List[Dict]) -> bool:
-        """Check if all tasks are completed.
-
-        Args:
-            completed: List of tasks that have been completed.
-
-        Returns:
-            True if all tasks are completed, False otherwise.
-        """
-        if not isinstance(completed, list):
-            raise TypeError("Completed must be a list")
-
-        return len(self.completed) == len(self.decompose())
 
     def replan(self, failed_task: Dict, error: str) -> List[Dict]:
         """Replan tasks based on a failed task and error message.
@@ -183,8 +149,8 @@ if __name__ == "__main__":
     assert next_task['task'] == 'Research', "Next task should be 'Research'"
 
     # Test is_complete
-    planner.completed = set(task['task'] for task in tasks)
-    assert planner.is_complete(completed), "All tasks should be marked as complete"
+    all_completed = [{"task": t["task"]} for t in tasks]
+    assert planner.is_complete(all_completed), "All tasks should be marked as complete"
 
     # Test replan
     failed_task = tasks[0]

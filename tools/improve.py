@@ -265,8 +265,22 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
     output_dir = Path("./skills")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Backup existing file before upgrade (restore if upgrade breaks it)
+    # Pre-check: if the file already passes validation, mark complete and skip
     target_file_path = output_dir / skill["file"]
+    if target_file_path.exists():
+        pre_ok, pre_msg = validate_output(str(target_file_path))
+        if pre_ok:
+            print(f"✅ {skill['file']} already passes validation! Marking complete.")
+            tree.mark_completed(skill["id"], pre_msg)
+            history["cycles"].append({
+                "cycle": cycle_num, "target": skill["file"], "passed": True,
+                "reason": f"Pre-validated: {pre_msg}", "timestamp": datetime.now().isoformat(),
+            })
+            history["total_passed"] += 1
+            save_history(history)
+            return True
+
+    # Backup existing file before upgrade (restore if upgrade breaks it)
     backup_path = target_file_path.with_suffix(".py.bak")
     if target_file_path.exists():
         import shutil
