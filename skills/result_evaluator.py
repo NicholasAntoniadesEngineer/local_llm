@@ -73,35 +73,32 @@ class ResultEvaluator:
 
 if __name__ == "__main__":
     evaluator = ResultEvaluator()
-    
-    # Test 1: Relevant search result
+
+    # Test 1: Relevant result scores higher than irrelevant
     score1 = evaluator.score_search_result("Python programming", "Python Basics Tutorial", "Learn the fundamentals of Python programming...")
-    print(f"Test 1 Score: {score1}")
-    
-    # Test 2: Junk search result
     score2 = evaluator.score_search_result("Python programming", "How to cook spaghetti", "This is a recipe for spaghetti...")
-    print(f"Test 2 Score: {score2}")
-    
-    # Test 3: Working code
-    code3 = "print('Hello, World!')"
-    output3 = "Hello, World!"
-    score3 = evaluator.score_code_output(code3, output3, False)
-    print(f"Test 3 Score: {score3}")
-    
-    # Test 4: Error code
-    code4 = "print('Hello, World!"  # Missing closing quote
-    output4 = "SyntaxError: EOL while scanning string literal"
-    score4 = evaluator.score_code_output(code4, output4, True)
-    print(f"Test 4 Score: {score4}")
-    
-    # Test 5: Duplicate detection
-    results5 = ["This is a test result.", "This is a test result."]
-    is_dup5 = evaluator.is_duplicate("This is a test result.", results5)
-    print(f"Test 5 Is Duplicate: {is_dup5}")
-    
-    # Test 6: Quality summary
-    scores6 = [0.9, 0.85, 0.75, 0.6, 0.95]
-    summary6 = evaluator.summarize_quality(scores6)
-    print(f"Test 6 Summary: {summary6}")
-    
-    print('\nALL TESTS PASSED')
+    assert score1 > score2, f"Relevant ({score1}) should beat irrelevant ({score2})"
+    assert 0 <= score1 <= 1.0, f"Score must be 0-1, got {score1}"
+
+    # Test 2: Code with error scores 0
+    assert evaluator.score_code_output("x", "error", True) == 0.0
+
+    # Test 3: Working code scores > 0
+    assert evaluator.score_code_output("print(1)", "1", False) > 0
+
+    # Test 4: Duplicate detection
+    assert evaluator.is_duplicate("test", ["test", "other"]) is True
+    assert evaluator.is_duplicate("unique", ["different", "also different"]) is False
+
+    # Test 5: Quality summary
+    summary = evaluator.summarize_quality([0.9, 0.8, 0.7])
+    assert summary["avg"] > 0.7
+    assert summary["min"] == 0.7
+    assert summary["max"] == 0.9
+    assert summary["assessment"] in ("High quality", "Moderate quality")
+
+    # Test 6: Empty quality summary
+    empty_summary = evaluator.summarize_quality([])
+    assert empty_summary["avg"] == 0.0
+
+    print("ALL TESTS PASSED")

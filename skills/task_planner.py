@@ -1,21 +1,31 @@
-import json
 from typing import List, Dict, Optional
 from error_recovery import ErrorRecovery
 
 
 class TaskPlanner:
+    """Manages task decomposition and execution for an agent."""
+
     def __init__(self, goal: str):
+        """Initialize the TaskPlanner with a goal.
+
+        Args:
+            goal: The main objective the agent is trying to achieve.
+        """
         self.goal = goal
         self.tasks = []
         self.completed = set()
+        self.recovery = ErrorRecovery()
 
     def decompose(self) -> List[Dict]:
-        """Decompose the goal into a list of tasks."
-        
-        if not isinstance(self.goal, str) or len(self.goal) == 0:
-            raise ValueError("Goal must be a non-empty string")
-        
-        # Real decomposition logic
+        """Decompose the goal into a list of tasks with dependencies and priorities.
+
+        Returns:
+            List of tasks with their properties.
+        """
+        if not self.goal:
+            raise ValueError("Goal cannot be empty")
+
+        # Simple decomposition logic
         return [
             {
                 'task': 'Research',
@@ -50,36 +60,94 @@ class TaskPlanner:
         ]
 
     def next_task(self, completed: List[Dict]) -> Optional[Dict]:
-        """Find the next task to execute."
-        
+        """Find the next task to execute based on completed tasks.
+
+        Args:
+            completed: List of tasks that have been completed.
+
+        Returns:
+            The next task to execute, or None if no tasks remain.
+        """
         if not isinstance(completed, list):
-            raise ValueError("Completed must be a list")
-        
+            raise TypeError("Completed must be a list")
+
         for task in self.decompose():
             if task['task'] not in self.completed:
                 return task
         return None
 
     def is_complete(self, completed: List[Dict]) -> bool:
-        """Check if all tasks are completed."
-        
+        """Check if all tasks are completed.
+
+        Args:
+            completed: List of tasks that have been completed.
+
+        Returns:
+            True if all tasks are completed, False otherwise.
+        """
         if not isinstance(completed, list):
-            raise ValueError("Completed must be a list")
-        
+            raise TypeError("Completed must be a list")
+
+        return len(self.completed) == len(self.decompose())
+
+    def is_complete(self, completed: List[Dict]) -> bool:
+        """Check if all tasks are completed.
+
+        Args:
+            completed: List of tasks that have been completed.
+
+        Returns:
+            True if all tasks are completed, False otherwise.
+        """
+        if not isinstance(completed, list):
+            raise TypeError("Completed must be a list")
+
+        return len(self.completed) == len(self.decompose())
+
+    def is_complete(self, completed: List[Dict]) -> bool:
+        """Check if all tasks are completed.
+
+        Args:
+            completed: List of tasks that have been completed.
+
+        Returns:
+            True if all tasks are completed, False otherwise.
+        """
+        if not isinstance(completed, list):
+            raise TypeError("Completed must be a list")
+
+        return len(self.completed) == len(self.decompose())
+
+    def is_complete(self, completed: List[Dict]) -> bool:
+        """Check if all tasks are completed.
+
+        Args:
+            completed: List of tasks that have been completed.
+
+        Returns:
+            True if all tasks are completed, False otherwise.
+        """
+        if not isinstance(completed, list):
+            raise TypeError("Completed must be a list")
+
         return len(self.completed) == len(self.decompose())
 
     def replan(self, failed_task: Dict, error: str) -> List[Dict]:
-        """Replan based on the failed task and error."
-        
-        if not isinstance(failed_task, dict):
-            raise ValueError("Failed task must be a dictionary")
-        
-        if not isinstance(error, str) or len(error) == 0:
-            raise ValueError("Error must be a non-empty string")
-        
-        error_type = ErrorRecovery.classify_error(error)
-        fix = ErrorRecovery.suggest_fix(error_type)
-        
+        """Replan tasks based on a failed task and error message.
+
+        Args:
+            failed_task: The task that failed.
+            error: The error message from the failed task.
+
+        Returns:
+            List of replanned tasks.
+        """
+        if not isinstance(failed_task, dict) or not isinstance(error, str):
+            raise TypeError("Failed task must be a dict and error must be a string")
+
+        error_type = self.recovery.classify_error(error)
+        fix_suggestion = self.recovery.suggest_fix(error_type)
+
         return [
             {
                 'task': 'Replan',
@@ -92,36 +160,42 @@ class TaskPlanner:
                 'tool': 'write_file',
                 'priority': 2,
                 'depends_on': ['Replan'],
-                'fix': fix
+                'fix_suggestion': fix_suggestion
             }
         ]
+
 
 if __name__ == "__main__":
     # Test the TaskPlanner
     planner = TaskPlanner("Implement a simple task planner")
-    
+
     # Test decompose
     tasks = planner.decompose()
-    print(f"Decomposed {len(tasks)} tasks:")
-    for task in tasks:
-        print(f"- {task['task']} (tool: {task['tool']})")
-    
+    assert len(tasks) == 5, "Decompose should return 5 tasks"
+    assert all('task' in task for task in tasks), "All tasks should have 'task' key"
+    assert all('tool' in task for task in tasks), "All tasks should have 'tool' key"
+    assert all('priority' in task for task in tasks), "All tasks should have 'priority' key"
+    assert all('depends_on' in task for task in tasks), "All tasks should have 'depends_on' key"
+
     # Test next_task
     completed = []
     next_task = planner.next_task(completed)
-    if next_task:
-        print(f"Next task: {next_task['task']} (tool: {next_task['tool']})")
-    else:
-        print("No more tasks to execute.")
-    
+    assert next_task['task'] == 'Research', "Next task should be 'Research'"
+
     # Test is_complete
-    planner.completed = tasks
-    print(f"Is complete? {planner.is_complete(tasks)}")
-    
+    planner.completed = set(task['task'] for task in tasks)
+    assert planner.is_complete(completed), "All tasks should be marked as complete"
+
     # Test replan
     failed_task = tasks[0]
-    error = "Error in research task"
+    error = "Error in research step"
     replanned_tasks = planner.replan(failed_task, error)
-    print(f"Replanned tasks: {replanned_tasks}")
-    
+    assert len(replanned_tasks) == 2, "Replan should return 2 tasks"
+    assert replanned_tasks[0]['task'] == 'Replan', "Replan task should be first"
+    assert replanned_tasks[1]['task'] == 'Fix', "Fix task should be second"
+
+    # Test edge cases
+    assert planner.next_task([]) is not None, "Next task should not be None"
+    assert planner.is_complete([]) is False, "Is complete should be False"
+
     print("ALL TESTS PASSED")

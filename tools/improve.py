@@ -272,53 +272,67 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
         import shutil
         shutil.copy2(target_file_path, backup_path)
 
-    try:
-        if agent is None:
-            model_name = os.environ.get("AGENT_MODEL", "tool_calling")
-            agent = MLXAgent(config_model_name=model_name, goal=f"Build: {skill['name']}")
-        else:
-            agent.reset_for_new_task(f"Build: {skill['name']}")
-        agent.run_loop(goal_text)
-    except KeyboardInterrupt:
-        raise
-    except Exception as e:
-        print(f"\n❌ Agent error: {e}")
-        history["cycles"].append({
-            "cycle": cycle_num, "target": "unknown", "passed": False,
-            "reason": str(e)[:100], "timestamp": datetime.now().isoformat(),
-        })
-        history["total_failed"] += 1
-        save_history(history)
-        return False
-
-    # Check the skill's target file
     target_file = str(output_dir / skill["file"])
     target_name = skill["file"]
+    max_retries = 3
+    ok = False
+    msg = ""
 
-    if not Path(target_file).exists():
-        print("\n❌ No output file produced")
-        history["cycles"].append({
-            "cycle": cycle_num, "target": "none", "passed": False,
-            "reason": "No file produced", "timestamp": datetime.now().isoformat(),
-        })
-        history["total_failed"] += 1
-        save_history(history)
-        return False
+    for attempt in range(1, max_retries + 1):
+        try:
+            if attempt == 1:
+                # First attempt: use the full goal
+                current_goal = goal_text
+            else:
+                # Retry: tell the agent exactly what failed and how to fix it
+                current_goal = (
+                    f"Your previous code was REJECTED by validation.\n\n"
+                    f"REJECTION REASON: {msg}\n\n"
+                    f"Fix this SPECIFIC issue. The validation requires:\n"
+                    f"- MINIMUM 3 functions or methods (not counting test code)\n"
+                    f"- MINIMUM 5 assert statements in the test block\n"
+                    f"- No 'from src.' imports\n"
+                    f"- Must print 'ALL TESTS PASSED'\n\n"
+                    f"Read the current file, fix the issue, test it, say DONE."
+                )
 
-    target_name = Path(target_file).name
-    print(f"\n{'─'*40}")
-    print(f"VALIDATING: {target_file}")
+            if agent is None:
+                model_name = os.environ.get("AGENT_MODEL", "tool_calling")
+                agent = MLXAgent(config_model_name=model_name, goal=f"Build: {skill['name']}")
+            else:
+                agent.reset_for_new_task(f"{'Fix' if attempt > 1 else 'Build'}: {skill['name']}")
+            agent.run_loop(current_goal)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print(f"\n❌ Agent error: {e}")
+            msg = str(e)[:200]
+            continue
 
-    ok, msg = validate_output(target_file)
+        # Validate the output
+        if not Path(target_file).exists():
+            msg = "No file produced"
+            print(f"\n❌ Attempt {attempt}/{max_retries}: {msg}")
+            continue
 
-    # Log validation
+        print(f"\n{'─'*40}")
+        print(f"VALIDATING (attempt {attempt}/{max_retries}): {target_file}")
+        ok, msg = validate_output(target_file)
+
+        if ok:
+            print(f"✅ PASSED: {target_name} - {msg}")
+            break
+        else:
+            print(f"❌ FAILED (attempt {attempt}/{max_retries}): {msg}")
+            if attempt < max_retries:
+                print(f"🔄 Retrying with validation feedback...")
+
+    # Log result
     cycle_logger = AgentLogger(f"cycle_{cycle_num}")
     cycle_logger.validation(target_name, ok, msg)
 
     if ok:
-        print(f"✅ PASSED: {target_name} - {msg}")
         tree.mark_completed(skill["id"], msg)
-        # Remove backup on success
         if backup_path.exists():
             backup_path.unlink()
         history["cycles"].append({
@@ -327,9 +341,7 @@ def run_cycle(cycle_num: int, agent=None) -> bool:
         })
         history["total_passed"] += 1
     else:
-        print(f"❌ FAILED: {target_name} - {msg}")
         tree.mark_failed(skill["id"], msg)
-        # Restore backup if upgrade broke a working file
         if backup_path.exists():
             import shutil
             shutil.copy2(backup_path, target_file_path)

@@ -32,7 +32,14 @@ CONFIG = AgentConfig(
         "balanced": ModelConfig(
             name="mlx-community/Qwen3-30B-A3B-4bit",
             max_tokens=4096,
-            context_window=12_288,  # 12K safe limit for 36GB M4 Max (prevents Metal OOM)
+            context_window=12_288,  # 12K safe limit for 36GB M4 Max
+        ),
+        # Qwen3-Coder: purpose-built for agentic coding, 70.6% SWE-Bench
+        # Same MoE arch as balanced (30B total, 3B active), same memory footprint
+        "coder": ModelConfig(
+            name="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit",
+            max_tokens=4096,
+            context_window=12_288,
         ),
         "quality": ModelConfig(
             name="mlx-community/Qwen3-32B-4bit",
