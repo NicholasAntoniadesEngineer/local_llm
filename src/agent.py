@@ -14,6 +14,8 @@ import re
 import os
 import sys
 import gc
+import threading
+import time as _time_mod
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +25,74 @@ from src.config import CONFIG
 from src.memory import MemoryManager
 from src.logger import AgentLogger
 from src.skill_tree import SkillTree
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Resource sampler — background thread logging CPU/mem/GPU status
+# ═══════════════════════════════════════════════════════════════════════
+
+def _resource_sampler(run_dir: Path, stop_event: threading.Event):
+    """Sample system resources every 0.5s into resources.jsonl."""
+    log_path = run_dir / "resources.jsonl"
+    try:
+        import psutil
+    except ImportError:
+        return  # psutil not available, skip sampling
+
+    with open(log_path, "a") as log:
+        while not stop_event.is_set():
+            try:
+                cpu = psutil.cpu_percent(interval=0.1)
+                mem = psutil.virtual_memory()
+                gpu_status = "idle"
+                perf_file = run_dir / "perf.json"
+                if perf_file.exists():
+                    try:
+                        data = json.loads(perf_file.read_text())
+                        gpu_status = data.get("status", "idle")
+                    except Exception:
+                        pass
+                entry = json.dumps({
+                    "t": round(_time_mod.time(), 2),
+                    "cpu": cpu,
+                    "mem_gb": round(mem.used / 1e9, 1),
+                    "free_gb": round(mem.available / 1e9, 1),
+                    "gpu": gpu_status,
+                    "rss_mb": round(psutil.Process(os.getpid()).memory_info().rss / 1e6, 0),
+                })
+                log.write(entry + "\n")
+                log.flush()
+            except Exception:
+                pass
+            stop_event.wait(0.5)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Idle scheduler — runs background tasks during GPU-idle windows
+# ═══════════════════════════════════════════════════════════════════════
+
+class IdleScheduler:
+    """Runs queued tasks during tool execution (when GPU is idle)."""
+
+    def __init__(self):
+        self._queue: list[tuple[str, callable]] = []
+        self._results: dict[str, any] = {}
+
+    def enqueue(self, name: str, fn: callable):
+        self._queue.append((name, fn))
+
+    def run_pending(self, max_time: float = 3.0):
+        """Run queued tasks up to max_time seconds."""
+        deadline = _time_mod.time() + max_time
+        while self._queue and _time_mod.time() < deadline:
+            name, fn = self._queue.pop(0)
+            try:
+                self._results[name] = fn()
+            except Exception as e:
+                self._results[name] = f"ERROR: {e}"
+
+    def get_result(self, name: str):
+        return self._results.pop(name, None)
 
 
 # Tool definitions in OpenAI-compatible format (what Qwen3 was trained on)
@@ -211,6 +281,7 @@ class MLXAgent:
         self.logger = AgentLogger()
         self.skill_tree = SkillTree()
         self._search_cache: dict[str, str] = {}
+        self._idle_scheduler = IdleScheduler()
         self._search_quality: float = 0.5
 
         # Performance tracking
@@ -705,7 +776,10 @@ class MLXAgent:
         try:
             # Write tool-executing status so monitor always has fresh data
             self._write_status(f"TOOL: {name}", generating=False)
-            return handler(args)
+            result = handler(args)
+            # GPU is idle during tool execution — run background tasks
+            self._idle_scheduler.run_pending(max_time=2.0)
+            return result
         except Exception as e:
             return f"ERROR in {name}: {e}"
 
@@ -909,6 +983,15 @@ class MLXAgent:
         except Exception:
             _loop_detector = None
 
+        # Start resource sampler thread for real-time utilization tracking
+        _sampler_stop = threading.Event()
+        _sampler_thread = threading.Thread(
+            target=_resource_sampler,
+            args=(self.logger.run_dir, _sampler_stop),
+            daemon=True,
+        )
+        _sampler_thread.start()
+
         for step in range(1, CONFIG.max_iterations + 1):
             # Inject skill focus every 5 steps or on failure
             if step % 5 == 1 or (step > 1 and not self._perf["tool_success"].get("last_ok", True)):
@@ -1088,6 +1171,10 @@ class MLXAgent:
         avg_step = sum(p["step_times"]) / max(1, len(p["step_times"]))
         print(f"\n📊 Performance: {avg_tok_s:.0f} tok/s avg | {p['total_tokens']} tokens | {success_rate:.0%} tool success | {avg_step:.1f}s/step")
         print("🛑 Session complete.")
+
+        # Stop resource sampler
+        _sampler_stop.set()
+        _sampler_thread.join(timeout=2)
 
 
 def main() -> None:

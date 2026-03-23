@@ -385,6 +385,23 @@ def build_dashboard() -> Layout:
     hw_table.add_row("Used", f"{mem['used_gb']:.1f} GB ({mem['percent']}%)")
     hw_table.add_row("Free", f"{mem['free_gb']:.1f} GB")
 
+    # GPU utilization from resources.jsonl (last 20 samples)
+    gpu_busy_pct = "—"
+    try:
+        run_dir = get_current_run_dir()
+        if run_dir:
+            res_file = run_dir / "resources.jsonl"
+            if res_file.exists():
+                lines = res_file.read_text().strip().split("\n")[-20:]
+                total = len(lines)
+                busy = sum(1 for l in lines if '"GENERATING"' in l or '"PREFILL' in l)
+                if total > 0:
+                    pct = round(busy / total * 100)
+                    gpu_busy_pct = f"{pct}%"
+    except Exception:
+        pass
+    hw_table.add_row("GPU Busy", gpu_busy_pct)
+
     # Agent Process
     agent_table = Table(title="Agent", expand=False, box=box.ROUNDED, padding=(0, 1))
     agent_table.add_column("", style="cyan", width=10, no_wrap=True)

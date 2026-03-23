@@ -1,0 +1,67 @@
+{"t": 1774261357.83, "cpu": 14.0, "mem_gb": 23.2, "free_gb": 11.1, "gpu": "PREFILLING 3249 tokens...", "rss_mb": 13112.0}
+{"t": 1774261358.44, "cpu": 9.9, "mem_gb": 24.7, "free_gb": 9.6, "gpu": "PREFILLING 3249 tokens...", "rss_mb": 13118.0}
+{"t": 1774261359.04, "cpu": 0.0, "mem_gb": 24.7, "free_gb": 9.7, "gpu": "PREFILLING 3249 tokens...", "rss_mb": 13118.0}
+{"t": 1774261359.65, "cpu": 9.6, "mem_gb": 24.8, "free_gb": 9.5, "gpu": "PREFILLING 3249 tokens...", "rss_mb": 13118.0}
+{"t": 1774261360.26, "cpu": 0.0, "mem_gb": 23.8, "free_gb": 10.6, "gpu": "idle", "rss_mb": 13120.0}
+{"t": 1774261360.87, "cpu": 9.3, "mem_gb": 24.9, "free_gb": 9.5, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261361.48, "cpu": 9.0, "mem_gb": 25.4, "free_gb": 9.2, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261362.09, "cpu": 24.1, "mem_gb": 25.6, "free_gb": 9.0, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261362.7, "cpu": 3.4, "mem_gb": 25.7, "free_gb": 8.9, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261363.3, "cpu": 8.8, "mem_gb": 25.9, "free_gb": 8.7, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261363.91, "cpu": 17.8, "mem_gb": 24.6, "free_gb": 10.0, "gpu": "PREFILLING 3293 tokens...", "rss_mb": 13125.0}
+{"t": 1774261364.52, "cpu": 15.7, "mem_gb": 25.2, "free_gb": 9.4, "gpu": "idle", "rss_mb": 13126.0}
+{"t": 1774261365.12, "cpu": 12.4, "mem_gb": 25.2, "free_gb": 9.4, "gpu": "idle", "rss_mb": 13127.0}
+{"t": 1774261365.73, "cpu": 20.8, "mem_gb": 25.3, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13126.0}
+{"t": 1774261366.34, "cpu": 11.1, "mem_gb": 25.3, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13126.0}
+{"t": 1774261366.95, "cpu": 44.8, "mem_gb": 25.4, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13127.0}
+{"t": 1774261367.56, "cpu": 19.4, "mem_gb": 24.7, "free_gb": 9.9, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261368.16, "cpu": 23.4, "mem_gb": 25.4, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261368.77, "cpu": 12.6, "mem_gb": 25.5, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261369.38, "cpu": 11.8, "mem_gb": 25.5, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261369.99, "cpu": 11.7, "mem_gb": 25.5, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261370.6, "cpu": 18.2, "mem_gb": 25.4, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13128.0}
+{"t": 1774261371.2, "cpu": 10.9, "mem_gb": 25.5, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261371.81, "cpu": 10.6, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261372.42, "cpu": 9.8, "mem_gb": 25.5, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261373.02, "cpu": 25.4, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261373.63, "cpu": 10.6, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261374.24, "cpu": 21.5, "mem_gb": 24.9, "free_gb": 9.9, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261374.85, "cpu": 10.9, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261375.46, "cpu": 11.5, "mem_gb": 25.6, "free_gb": 9.1, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261376.07, "cpu": 11.0, "mem_gb": 25.6, "free_gb": 9.1, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261376.68, "cpu": 10.5, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13130.0}
+{"t": 1774261377.28, "cpu": 20.0, "mem_gb": 25.7, "free_gb": 9.1, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261377.89, "cpu": 18.4, "mem_gb": 25.0, "free_gb": 9.8, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261378.5, "cpu": 11.1, "mem_gb": 25.7, "free_gb": 9.0, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261379.11, "cpu": 18.3, "mem_gb": 25.7, "free_gb": 9.1, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261379.72, "cpu": 31.3, "mem_gb": 25.8, "free_gb": 9.0, "gpu": "idle", "rss_mb": 13129.0}
+{"t": 1774261380.33, "cpu": 12.5, "mem_gb": 26.3, "free_gb": 8.5, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261380.94, "cpu": 9.6, "mem_gb": 26.4, "free_gb": 8.4, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261381.55, "cpu": 9.8, "mem_gb": 26.5, "free_gb": 8.3, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261382.16, "cpu": 0.0, "mem_gb": 26.6, "free_gb": 8.2, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261382.77, "cpu": 7.5, "mem_gb": 26.7, "free_gb": 8.1, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261383.38, "cpu": 11.6, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261383.99, "cpu": 10.3, "mem_gb": 26.9, "free_gb": 7.9, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261384.59, "cpu": 9.9, "mem_gb": 27.0, "free_gb": 7.8, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261385.2, "cpu": 8.5, "mem_gb": 27.1, "free_gb": 7.7, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261385.81, "cpu": 10.3, "mem_gb": 27.2, "free_gb": 7.6, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261386.42, "cpu": 7.6, "mem_gb": 27.3, "free_gb": 7.5, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261387.02, "cpu": 8.5, "mem_gb": 27.4, "free_gb": 7.4, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261387.63, "cpu": 16.6, "mem_gb": 26.8, "free_gb": 8.1, "gpu": "PREFILLING 4521 tokens...", "rss_mb": 13142.0}
+{"t": 1774261388.24, "cpu": 0.0, "mem_gb": 25.6, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261388.85, "cpu": 11.2, "mem_gb": 25.6, "free_gb": 9.3, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261389.46, "cpu": 10.7, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261390.07, "cpu": 18.7, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261390.68, "cpu": 9.7, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261391.29, "cpu": 11.0, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261391.9, "cpu": 9.9, "mem_gb": 26.8, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261392.51, "cpu": 7.7, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261393.11, "cpu": 10.2, "mem_gb": 25.6, "free_gb": 9.2, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261393.72, "cpu": 8.3, "mem_gb": 26.9, "free_gb": 7.9, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261394.33, "cpu": 10.2, "mem_gb": 26.9, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261394.93, "cpu": 10.7, "mem_gb": 26.9, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13143.0}
+{"t": 1774261395.54, "cpu": 11.9, "mem_gb": 26.9, "free_gb": 8.0, "gpu": "idle", "rss_mb": 13144.0}
+{"t": 1774261396.15, "cpu": 7.6, "mem_gb": 26.9, "free_gb": 7.9, "gpu": "PREFILLING 4167 tokens...", "rss_mb": 13148.0}
+{"t": 1774261396.75, "cpu": 18.7, "mem_gb": 27.1, "free_gb": 7.7, "gpu": "PREFILLING 4167 tokens...", "rss_mb": 13148.0}
+{"t": 1774261397.35, "cpu": 13.1, "mem_gb": 27.2, "free_gb": 7.6, "gpu": "PREFILLING 4167 tokens...", "rss_mb": 13148.0}
+{"t": 1774261397.96, "cpu": 3.5, "mem_gb": 27.3, "free_gb": 7.5, "gpu": "PREFILLING 4167 tokens...", "rss_mb": 13148.0}
