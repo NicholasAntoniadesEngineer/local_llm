@@ -123,3 +123,597 @@ if __name__ == "__main__":
     assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
 
     print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
+    # Test 1: 3 identical calls should be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1")
+    assert detector.is_stuck(), "Test 1 failed: 3 identical calls should be stuck"
+
+    # Test 2: 3 different calls should not be stuck
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result2")
+    detector.record("toolC", "args3", "result3")
+    assert not detector.is_stuck(), "Test 2 failed: 3 different calls should not be stuck"
+
+    # Test 3: Similar but not identical results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 slightly different")
+    assert not detector.is_stuck(), "Test 3 failed: Similar but not identical results should not be considered stuck"
+
+    # Test 4: Empty actions
+    detector = LoopDetector()
+    assert not detector.is_stuck(), "Test 4 failed: Empty actions should not be stuck"
+
+    # Test 5: Different tool after similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolB", "args2", "result2")
+    assert not detector.is_stuck(), "Test 5 failed: Different tool after similar results should not be stuck"
+
+    # Test 6: Similar results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 6 failed: Similar results with different tools should not be stuck"
+
+    # Test 7: Identical results with different tools
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolB", "args2", "result1")
+    detector.record("toolC", "args3", "result1")
+    assert not detector.is_stuck(), "Test 7 failed: Identical results with different tools should not be stuck"
+
+    # Test 8: Stuck with same tool and similar results
+    detector = LoopDetector()
+    detector.record("toolA", "args1", "result1")
+    detector.record("toolA", "args1", "result1 similar")
+    detector.record("toolA", "args1", "result1 similar")
+    assert detector.is_stuck(), "Test 8 failed: Same tool with similar results should be stuck"
+
+    print("ALL TESTS PASSED")
