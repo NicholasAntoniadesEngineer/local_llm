@@ -173,7 +173,7 @@ def discover_output_file():
 
 
 def validate_output(filepath: str) -> tuple[bool, str]:
-    """Validate generated code actually works."""
+    """Validate generated code — syntax, tests, AND structural quality."""
     path = Path(filepath)
     if not path.exists():
         return False, "File not created"
@@ -182,16 +182,28 @@ def validate_output(filepath: str) -> tuple[bool, str]:
     if size < 200:
         return False, f"Too small ({size}B) - placeholder"
 
-    # Syntax check
+    source = path.read_text()
+
+    # Structural quality gate
+    import ast
     try:
-        result = subprocess.run(
-            ["python3", "-m", "py_compile", str(path)],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return False, f"Syntax error: {result.stderr[:200]}"
-    except Exception as e:
-        return False, f"Compile failed: {e}"
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return False, f"Syntax error: {e}"
+
+    # Count functions, classes, asserts
+    func_count = sum(1 for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    class_count = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+    assert_count = source.count("assert ")
+
+    if func_count < 3:
+        return False, f"Too few functions ({func_count}). Need ≥3 for production quality."
+    if assert_count < 5:
+        return False, f"Too few assertions ({assert_count}). Need ≥5 to verify correctness."
+
+    # Reject files that import from src.* (skills must be standalone)
+    if "from src." in source:
+        return False, "Bad import: 'from src.*' — skills must be standalone"
 
     # Run tests
     try:
@@ -201,13 +213,10 @@ def validate_output(filepath: str) -> tuple[bool, str]:
             ["python3", str(path)],
             capture_output=True, text=True, timeout=30, env=env,
         )
-        source = path.read_text()
-        has_code = "def " in source or "class " in source
         if (result.returncode == 0
                 and "ALL TESTS PASSED" in result.stdout
-                and "Traceback" not in result.stderr
-                and has_code):
-            return True, f"Tests passed ({size:,}B)"
+                and "Traceback" not in result.stderr):
+            return True, f"Tests passed ({size:,}B, {func_count}fn, {assert_count}asserts)"
         else:
             output = result.stdout + result.stderr
             return False, f"Tests failed: {output[:200]}"

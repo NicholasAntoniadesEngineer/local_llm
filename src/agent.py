@@ -273,8 +273,10 @@ class MLXAgent:
         self.memory_manager = MemoryManager(goal)
         self.logger = AgentLogger(goal)
         self._perf = {
+            "total_tokens": 0,
+            "total_gen_time": 0.0,
             "step_times": [],
-            "tool_calls": [],
+            "tool_success": {"total": 0, "success": 0},
             "peak_tok_s": 0.0,
         }
         self._search_cache = {}
@@ -308,6 +310,28 @@ class MLXAgent:
                 tokenize=False,
                 add_generation_prompt=True,
             )
+
+    def _write_status(self, status: str, generating: bool = False):
+        """Write current status to perf.json so the monitor always has fresh data."""
+        try:
+            import time as _t
+            stats = {
+                "status": status,
+                "generating": generating,
+                "model": self.config_model.name.split("/")[-1],
+                "context_window": self.config_model.context_window,
+                "max_tokens": self.config_model.max_tokens,
+                "model_size_gb": round(self._model_size_gb, 1),
+                "step": len(self._perf["step_times"]) + 1,
+                "total_gen_tokens": self._perf.get("total_tokens", 0),
+                "total_prompt_tokens": self._perf.get("prompt_tokens", 0),
+                "peak_tok_s": self._perf.get("peak_tok_s", 0),
+                "timestamp": _t.time(),
+            }
+            with open(self.logger.run_dir / "perf.json", "w") as f:
+                json.dump(stats, f)
+        except Exception:
+            pass
 
     def _count_tokens(self, messages: list[dict]) -> int:
         """Count actual tokens using the tokenizer (not estimates)."""
@@ -414,8 +438,8 @@ class MLXAgent:
                             pass
                         last_stream_write = now
 
-                    # Perf stats (~3s interval)
-                    if now - last_perf_write > 3.0:
+                    # Perf stats (~1s interval for real-time monitoring)
+                    if now - last_perf_write > 1.0:
                         decode_time = max(0.01, elapsed_so_far - (first_token_time or 0))
                         decode_tok_s = (token_count - 1) / decode_time if token_count > 1 else 0
                         live_tok_s = token_count / max(0.01, elapsed_so_far)
@@ -676,6 +700,8 @@ class MLXAgent:
         if not handler:
             return f"Unknown tool: {name}"
         try:
+            # Write tool-executing status so monitor always has fresh data
+            self._write_status(f"TOOL: {name}", generating=False)
             return handler(args)
         except Exception as e:
             return f"ERROR in {name}: {e}"
@@ -872,6 +898,13 @@ class MLXAgent:
         _seen_writes: dict[str, int] = {}   # hash(content) → count
         _seen_errors: dict[str, int] = {}   # hash(error[:200]) → count
 
+        # Try to use the LoopDetector skill if available
+        try:
+            from skills import get_skill
+            _loop_detector = get_skill("loop_detector")
+        except Exception:
+            _loop_detector = None
+
         for step in range(1, CONFIG.max_iterations + 1):
             # Inject skill focus every 5 steps or on failure
             if step % 5 == 1 or (step > 1 and not self._perf["tool_success"].get("last_ok", True)):
@@ -961,18 +994,27 @@ class MLXAgent:
                     if success and name == "web_search":
                         self.memory_manager.record_discovery(result[:200])
 
-                # ── Content-hash loop detection ──────────────────────────
+                # ── Loop detection (skill-based + hash fallback) ────────
                 import hashlib as _hl
                 _stuck = False
 
-                if name == "write_file" and success:
+                # Record in LoopDetector skill if available
+                if _loop_detector and hasattr(_loop_detector, 'record'):
+                    _loop_detector.record(name, json.dumps(args)[:200], result[:200])
+                    if _loop_detector.is_stuck():
+                        _stuck = True
+                        escape = _loop_detector.suggest_escape(name)
+                        print(f"  🔄 STUCK (skill-detected): {escape or 'try different approach'}")
+
+                # Hash-based fallback
+                if not _stuck and name == "write_file" and success:
                     h = _hl.md5(args.get("content", "")[:500].encode()).hexdigest()
                     _seen_writes[h] = _seen_writes.get(h, 0) + 1
                     if _seen_writes[h] >= 2:
                         _stuck = True
                         print(f"  🔄 STUCK: wrote identical file {_seen_writes[h]}x")
 
-                if not success:
+                if not _stuck and not success:
                     h = _hl.md5(result[:200].encode()).hexdigest()
                     _seen_errors[h] = _seen_errors.get(h, 0) + 1
                     if _seen_errors[h] >= 2:

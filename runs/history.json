@@ -251,8 +251,218 @@
       "passed": false,
       "reason": "'tool_success'",
       "timestamp": "2026-03-23T10:44:47.204892"
+    },
+    {
+      "cycle": 7,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:44:54.058021"
+    },
+    {
+      "cycle": 8,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:01.685281"
+    },
+    {
+      "cycle": 9,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:08.552560"
+    },
+    {
+      "cycle": 10,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:15.406932"
+    },
+    {
+      "cycle": 11,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:22.274898"
+    },
+    {
+      "cycle": 12,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:29.137082"
+    },
+    {
+      "cycle": 13,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:35.992467"
+    },
+    {
+      "cycle": 14,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:42.834516"
+    },
+    {
+      "cycle": 15,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:49.688995"
+    },
+    {
+      "cycle": 16,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:45:56.545455"
+    },
+    {
+      "cycle": 17,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:03.412355"
+    },
+    {
+      "cycle": 18,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:10.260495"
+    },
+    {
+      "cycle": 19,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:17.115283"
+    },
+    {
+      "cycle": 20,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:23.979856"
+    },
+    {
+      "cycle": 21,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:30.826179"
+    },
+    {
+      "cycle": 22,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:38.360557"
+    },
+    {
+      "cycle": 23,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:45.211649"
+    },
+    {
+      "cycle": 24,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:52.066659"
+    },
+    {
+      "cycle": 25,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:46:58.946140"
+    },
+    {
+      "cycle": 26,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:05.792844"
+    },
+    {
+      "cycle": 27,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:12.650716"
+    },
+    {
+      "cycle": 28,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:19.522115"
+    },
+    {
+      "cycle": 29,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:26.375937"
+    },
+    {
+      "cycle": 30,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:33.256891"
+    },
+    {
+      "cycle": 31,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:40.139009"
+    },
+    {
+      "cycle": 32,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:46.994996"
+    },
+    {
+      "cycle": 33,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:47:53.887473"
+    },
+    {
+      "cycle": 34,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:48:00.756242"
+    },
+    {
+      "cycle": 35,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:48:08.332077"
+    },
+    {
+      "cycle": 36,
+      "target": "unknown",
+      "passed": false,
+      "reason": "'tool_success'",
+      "timestamp": "2026-03-23T10:48:15.194483"
     }
   ],
   "total_passed": 16,
-  "total_failed": 20
+  "total_failed": 50
 }
