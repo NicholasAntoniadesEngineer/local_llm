@@ -14,20 +14,25 @@ __pycache__/
 .idea/
 .DS_Store
 
-# Run artifacts (transient per-run files)
-runs/*/perf.json
-runs/*/stream.txt
-runs/*/stream_history.txt
+# Run output (transient per-run files)
+run_output_data/*/perf.json
+run_output_data/*/stream.txt
+run_output_data/*/stream_history.txt
+run_output_data/*/resources.jsonl
+run_output_data/2*/
+
+# SQLite WAL/SHM files
+run_output_data/skill_tree*.db-shm
+run_output_data/skill_tree*.db-wal
 
 # Model cache
 .cache/
+
+# Test stubs
 failing_test.py
 missing_import.py
 syntax_error.py
 valid.py
-runs/2*/
 
-# SQLite WAL/SHM files
-runs/skill_tree*.db-shm
-runs/skill_tree*.db-wal
-"runs/skill_tree *.db*"
+# Skill backups
+skills/*.bak

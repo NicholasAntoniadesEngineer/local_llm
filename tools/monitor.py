@@ -42,7 +42,7 @@ except ImportError:
 # ── Dynamic paths (never hardcoded) ─────────────────────────────────────
 RUNS_DIR = Path("./runs")
 LOGS_DIR = Path("./skills/logs")
-EVOLUTION_LOG = Path("./runs/skill_tree_evolution.log")
+EVOLUTION_LOG = Path("./run_output_data/skill_tree_evolution.log")
 TMP_IMPROVE_LOG = Path("/tmp/improve_loop.log")
 
 # ── Global singleton SkillTree + cache (prevents crashes) ─────────────────────

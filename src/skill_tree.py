@@ -127,6 +127,7 @@ class SkillTree:
                 "pull_count": "ALTER TABLE skills ADD COLUMN pull_count INTEGER DEFAULT 0",
                 "domain": "ALTER TABLE skills ADD COLUMN domain TEXT DEFAULT 'general'",
                 "version": "ALTER TABLE skills ADD COLUMN version TEXT DEFAULT '1.0'",
+                "last_fail_reason": "ALTER TABLE skills ADD COLUMN last_fail_reason TEXT DEFAULT ''",
             }
             for col, sql in migrations.items():
                 if col not in cols:
@@ -329,6 +330,13 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
             r = self._field(nid, "current_impact") or data.get("impact", 5)
             ucb = r + c * math.sqrt(math.log(N) / n)
 
+            # Penalize skills that keep failing (prevents infinite retry loops)
+            fail_count = self._field(nid, "fail_count") or 0
+            success_count = self._field(nid, "success_count") or 0
+            if fail_count > 2:
+                failure_rate = fail_count / max(1, fail_count + success_count)
+                ucb -= failure_rate * 3.0  # Heavy penalty for repeated failures
+
             if ucb > best_score:
                 best_score = ucb
                 best_node = nid
@@ -353,8 +361,8 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
 
     def mark_failed(self, sid, error=""):
         with self._conn() as c:
-            c.execute("UPDATE skills SET fail_count=fail_count+1, last_updated=? WHERE id=?",
-                      (datetime.now().isoformat(), sid))
+            c.execute("UPDATE skills SET fail_count=fail_count+1, last_fail_reason=?, last_updated=? WHERE id=?",
+                      (error[:300], datetime.now().isoformat(), sid))
         self._log(sid, "failed", error[:200])
 
     def update_impact_from_result(self, sid, gain):
@@ -637,8 +645,19 @@ Output ONLY the Python code. No explanation."""
             if sname:
                 dependents.append(sname)
 
-        return f"""You are building a production-quality Python module for a self-improving AI agent system.
+        # Get last failure reason if any
+        fail_count = self._field(skill["id"], "fail_count") or 0
+        last_fail = self._field(skill["id"], "last_fail_reason") or ""
+        fail_warning = ""
+        if fail_count > 0 and last_fail:
+            fail_warning = f"""
+=== PREVIOUS FAILURE (attempt #{fail_count}) ===
+REASON: {last_fail}
+FIX THIS SPECIFIC ISSUE. Do not repeat the same mistake.
+"""
 
+        return f"""You are building a production-quality Python module for a self-improving AI agent system.
+{fail_warning}
 === TASK ===
 Module: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')})
 File: {skill['file']}
@@ -654,12 +673,13 @@ Impact: {skill.get('current_impact', skill.get('impact','?'))}/10
 This module is depended on by: {', '.join(dependents) if dependents else 'nothing yet (leaf node)'}
 It builds on: {', '.join(prereq_names) if prereq_names else 'nothing (foundation skill)'}
 
-=== QUALITY REQUIREMENTS ===
-1. Production-quality code: type hints, docstrings, error handling
-2. Non-trivial implementation: real algorithms, not just pass-through wrappers
-3. Each method must have meaningful logic (10+ lines, not 1-line returns)
-4. Handle edge cases: empty inputs, None values, invalid types
-5. Tests must VERIFY correctness with assertions, not just run without error
+=== VALIDATION GATE (your code MUST pass these or it gets deleted) ===
+1. MINIMUM 3 functions or methods (not counting __init__ or test code)
+2. MINIMUM 5 assert statements in the test block
+3. No 'from src.' imports — skills must be standalone
+4. Must print 'ALL TESTS PASSED' when run
+5. Each method must have real logic (10+ lines), not single-line returns
+6. Handle edge cases: empty inputs, None values, boundary conditions
 
 === AVAILABLE PREREQ APIs ===
 {prereq_code}

@@ -12,7 +12,7 @@ SRC_DIR = ROOT / "src"
 SKILLS_DIR = ROOT / "skills"
 
 # Per-run artifacts (logs, model output, perf stats)
-RUNS_DIR = ROOT / "runs"
+RUNS_DIR = ROOT / "run_output_data"
 
 # Run history (tracks pass/fail across all cycles)
 HISTORY_FILE = RUNS_DIR / "history.json"
