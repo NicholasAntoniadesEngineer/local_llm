@@ -21,6 +21,8 @@ from typing import Optional
 import networkx as nx
 
 from src.paths import SKILLS_DIR, RUNS_DIR
+from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
+from src.runtime.verifier import validate_generated_module
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -160,17 +162,9 @@ class SkillTree:
             if not fpath.exists() or fpath.stat().st_size < 200:
                 continue
             try:
-                source = fpath.read_text()
-                # Must parse as valid Python
-                compile(source, str(fpath), "exec")
-                # Must contain at least one class or function
-                if "def " not in source and "class " not in source:
-                    continue
-                env = os.environ.copy()
-                env["PYTHONPATH"] = str(Path(".").resolve()) + ":" + str(SKILLS_DIR)
-                r = subprocess.run(["python3", str(fpath)], capture_output=True, text=True, timeout=15, env=env)
-                if r.returncode == 0 and "ALL TESTS PASSED" in r.stdout and "Traceback" not in r.stderr:
-                    self.mark_completed(nid, "auto-detected")
+                accepted, summary = validate_generated_module(str(fpath), skill_tree=self)
+                if accepted:
+                    self.mark_completed(nid, summary or "auto-detected")
             except Exception:
                 pass
 
@@ -515,8 +509,7 @@ Output ONLY a JSON array. No explanation."""
             formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             response = generate(model, tokenizer, prompt=formatted, max_tokens=2048, sampler=sampler)
 
-            # Strip thinking blocks
-            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+            response = strip_thinking_tags(response)
 
             # Extract JSON array
             match = re.search(r"\[.*\]", response, re.DOTALL)
@@ -594,11 +587,10 @@ Output ONLY the Python code. No explanation."""
             messages = [{"role": "user", "content": prompt_text}]
             formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             response = generate(model, tokenizer, prompt=formatted, max_tokens=4096, sampler=sampler)
-            response = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL).strip()
+            response = strip_thinking_tags(response)
 
             # Extract code from markdown blocks or raw
-            code_match = re.search(r"```python\s*(.*?)```", response, re.DOTALL)
-            code = code_match.group(1).strip() if code_match else response
+            code = extract_python_code_block(response) or response
 
             # Write file
             target.write_text(code)

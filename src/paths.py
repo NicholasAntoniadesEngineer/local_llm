@@ -24,7 +24,7 @@ PROPOSALS_FILE = SKILLS_DIR / "tree_proposals.txt"
 def get_run_dir(run_id: str) -> Path:
     """Get or create a timestamped directory for a specific run.
 
-    Format: runs/YYYYMMDD_HHMMSS_short_goal/
+    Format: run_output_data/YYYYMMDD_HHMMSS_short_goal/
     Sanitizes the run_id to be filesystem-safe.
     """
     from datetime import datetime

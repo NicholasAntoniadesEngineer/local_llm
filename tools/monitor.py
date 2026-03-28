@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import json
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -40,9 +41,14 @@ except ImportError:
     sys.exit(1)
 
 # ── Dynamic paths (never hardcoded) ─────────────────────────────────────
-RUNS_DIR = Path("./runs")
+from src.paths import RUNS_DIR as PATHS_RUNS_DIR
+from src.runtime.benchmark_suite import FIXED_BENCHMARK_SLICE_NAME
+from src.runtime.state_store import PersistentStateStore, STATE_FILE
+
+
+RUNS_DIR = PATHS_RUNS_DIR
 LOGS_DIR = Path("./skills/logs")
-EVOLUTION_LOG = Path("./run_output_data/skill_tree_evolution.log")
+EVOLUTION_LOG = RUNS_DIR / "skill_tree_evolution.log"
 TMP_IMPROVE_LOG = Path("/tmp/improve_loop.log")
 
 # ── Global singleton SkillTree + cache (prevents crashes) ─────────────────────
@@ -68,14 +74,45 @@ def find_latest_file(pattern: str, directory: Path) -> Path | None:
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 
+def get_latest_run_record() -> dict:
+    """Read the latest persisted controller run record."""
+    try:
+        if not STATE_FILE.exists():
+            return {}
+        state_payload = json.loads(STATE_FILE.read_text())
+        runs = state_payload.get("runs", [])
+        return runs[-1] if runs else {}
+    except Exception:
+        return {}
+
+
 def get_current_run_dir() -> Path | None:
-    """Find the most recent run directory (for live logs + perf)."""
+    """Prefer the latest controller run directory, fall back to newest run folder."""
+    latest_run = get_latest_run_record()
+    run_dir_value = latest_run.get("run_dir", "")
+    if run_dir_value:
+        candidate_path = Path(run_dir_value)
+        if candidate_path.exists():
+            return candidate_path
     if not RUNS_DIR.exists():
         return None
     run_dirs = [d for d in RUNS_DIR.iterdir() if d.is_dir()]
     if not run_dirs:
         return None
     return max(run_dirs, key=lambda d: d.stat().st_mtime)
+
+
+def read_perf_payload(run_dir: Path | None) -> dict[str, Any]:
+    """Read the latest perf payload for the selected run directory."""
+    if not run_dir:
+        return {}
+    perf_path = run_dir / "perf.json"
+    if not perf_path.exists():
+        return {}
+    try:
+        return json.loads(perf_path.read_text())
+    except Exception:
+        return {}
 
 
 def freshness(path: Path | None) -> str:
@@ -118,36 +155,71 @@ def get_memory() -> dict:
     }
 
 
+def get_gpu_memory_info() -> dict:
+    """Best-effort Apple Silicon GPU/unified-memory visibility."""
+    mem = get_memory()
+    info = {
+        "device": "Apple Silicon GPU",
+        "shared_total_gb": mem["total_gb"],
+        "shared_free_gb": mem["free_gb"],
+        "source": "shared memory",
+    }
+
+    try:
+        profiler_result = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType", "-json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if profiler_result.returncode == 0 and profiler_result.stdout.strip():
+            profiler_data = json.loads(profiler_result.stdout)
+            gpu_entries = profiler_data.get("SPDisplaysDataType", [])
+            if gpu_entries:
+                chipset_name = gpu_entries[0].get("sppci_model", "") or gpu_entries[0].get("chipset_model", "")
+                if chipset_name:
+                    info["device"] = chipset_name
+                    info["source"] = "system_profiler"
+    except Exception:
+        pass
+
+    try:
+        run_dir = get_current_run_dir()
+        if run_dir:
+            perf_data = read_perf_payload(run_dir)
+            if perf_data:
+                info["status"] = perf_data.get("status", "idle")
+                info["context_fill_pct"] = perf_data.get("context_pct", "—")
+    except Exception:
+        pass
+
+    return info
+
+
 def get_model_info() -> dict:
     """Read model info from the running agent's perf.json (live, not hardcoded)."""
     info: dict[str, Any] = {}
     # Try live data first (actual running model)
     rd = get_current_run_dir()
     if rd:
-        pf = rd / "perf.json"
-        if pf.exists():
+        data = read_perf_payload(rd)
+        model_name = data.get("model", "")
+        if model_name:
+            info["short_name"] = model_name
+            info["name"] = model_name
+            info["context_window"] = data.get("context_window", 0)
+            info["max_tokens"] = data.get("max_tokens", 0)
+            info["model_size_gb"] = data.get("model_size_gb", "?")
             try:
-                data = json.loads(pf.read_text())
-                model_name = data.get("model", "")
-                if model_name:
-                    info["short_name"] = model_name
-                    info["name"] = model_name
-                    info["context_window"] = data.get("context_window", 0)
-                    info["max_tokens"] = data.get("max_tokens", 0)
-                    info["model_size_gb"] = data.get("model_size_gb", "?")
-                    # Find profile key by matching model name
-                    try:
-                        from src.config import CONFIG
-                        for k, m in CONFIG.models.items():
-                            if model_name in m.name:
-                                info["profile"] = k
-                                info["name"] = m.name
-                                break
-                    except Exception:
-                        pass
-                    return info
+                from src.config import CONFIG
+                for k, m in CONFIG.models.items():
+                    if model_name in m.name:
+                        info["profile"] = k
+                        info["name"] = m.name
+                        break
             except Exception:
                 pass
+            return info
     # Fallback to config
     try:
         from src.config import CONFIG
@@ -201,45 +273,36 @@ def get_live_agent_logs() -> str:
 
 def get_perf() -> dict:
     """Pull token performance from live perf.json first, events.jsonl as fallback."""
-    # If agent not running, return empty (monitor shows dashes)
-    proc = get_agent_process()
-    if not proc.get("running"):
-        return {"tokens_per_sec": "—", "peak_tok_s": "—", "context_fill_pct": "—", "gb_per_sec": "—"}
-
-    # Try live perf.json first (updated during generation)
     run_dir = get_current_run_dir()
     if run_dir:
-        pf = run_dir / "perf.json"
-        if pf.exists():
-            try:
-                data = json.loads(pf.read_text())
-                return {
-                    "tokens_per_sec": data.get("decode_tok_s", data.get("gen_tok_s", "?")),
-                    "peak_tok_s": data.get("peak_tok_s", "?"),
-                    "context_fill_pct": data.get("context_pct", 0),
-                    "gb_per_sec": round(data.get("bandwidth_used_gbs", 0), 1),
-                    "status": data.get("status", "GENERATING" if data.get("generating") else "idle"),
-                    "step": data.get("step", "?"),
-                    "prompt_tokens": data.get("prompt_tokens", 0),
-                    "gen_tokens": data.get("gen_tokens", 0),
-                }
-            except Exception:
-                pass
+        data = read_perf_payload(run_dir)
+        if data:
+            return {
+                "tokens_per_sec": data.get("decode_tok_s", data.get("gen_tok_s", "?")),
+                "peak_tok_s": data.get("peak_tok_s", "?"),
+                "context_fill_pct": data.get("context_pct", 0),
+                "gb_per_sec": round(data.get("bandwidth_used_gbs", 0), 1),
+                "status": data.get("status", "GENERATING" if data.get("generating") else "idle"),
+                "step": data.get("step", "?"),
+                "prompt_tokens": data.get("prompt_tokens", 0),
+                "gen_tokens": data.get("gen_tokens", 0),
+            }
 
     # Fallback to events.jsonl
     if not run_dir:
-        return {}
+        return {"tokens_per_sec": "—", "peak_tok_s": "—", "context_fill_pct": "—", "gb_per_sec": "—"}
 
     log_file = run_dir / "events.jsonl"
     if not log_file.exists():
         return {}
 
     try:
+        perf_payload = read_perf_payload(run_dir)
         lines = log_file.read_text().strip().split("\n")[-20:]
         latest_tok_s = 0.0
         peak_tok_s = 0.0
         context_fill = 0
-        context_window = 32768  # read from perf.json if available
+        context_window = perf_payload.get("context_window", 32768)
 
         for line in reversed(lines):  # newest first
             try:
@@ -278,6 +341,110 @@ def get_cycle_stats() -> dict:
         }
     except Exception:
         return {"cycles": 0, "passed": 0, "failed": 0, "deleted": 0}
+
+
+def get_controller_metrics() -> dict:
+    """Read controller-level metrics from the unified state store."""
+    try:
+        if not STATE_FILE.exists():
+            return {
+                "validation_pass_rate": "—",
+                "checkpoint_status": "—",
+                "crash_frequency": "—",
+                "reward_total": "—",
+                "task_phase": "—",
+                "task_step": "—",
+                "last_failure_type": "—",
+                "benchmark_name": "—",
+                "benchmark_avg_tok_s": "—",
+                "benchmark_elapsed_s": "—",
+            }
+        state_payload = json.loads(STATE_FILE.read_text())
+        runs = state_payload.get("runs", [])
+        latest_run = get_latest_run_record()
+        validations = state_payload.get("validation_records", [])
+        latest_run_id = latest_run.get("run_id", "")
+        run_validations = [record for record in validations if record.get("run_id") == latest_run_id]
+        pass_rate = round(
+            sum(1 for record in run_validations if record.get("accepted")) / max(1, len(run_validations)) * 100,
+            1,
+        )
+        run_rewards = [
+            float(record.get("reward", 0.0))
+            for record in state_payload.get("reward_records", [])
+            if record.get("run_id") == latest_run_id
+        ]
+        crash_runs = sum(1 for record in runs if not record.get("accepted", True))
+        loop_detection_rate = "—"
+        compression_rate = "—"
+        current_run_dir = get_current_run_dir()
+        if current_run_dir:
+            events_file = current_run_dir / "events.jsonl"
+            if events_file.exists():
+                raw_lines = [line for line in events_file.read_text().splitlines() if line.strip()]
+                parsed_events = []
+                for line in raw_lines:
+                    try:
+                        parsed_events.append(json.loads(line))
+                    except Exception:
+                        continue
+                step_count = sum(1 for event in parsed_events if event.get("type") == "step_start")
+                loop_count = sum(1 for event in parsed_events if event.get("type") == "loop_detected")
+                compression_count = sum(
+                    1
+                    for event in parsed_events
+                    if event.get("type") == "decision" and event.get("decision") == "context_guard"
+                )
+                loop_detection_rate = f"{loop_count}/{max(1, step_count)}"
+                compression_rate = f"{compression_count}/{max(1, step_count)}"
+        latest_run_dir = latest_run.get("run_dir")
+        state_store = PersistentStateStore(
+            latest_run.get("run_id", "monitor"),
+            latest_run.get("goal", "monitor"),
+            Path(latest_run_dir) if latest_run_dir else RUNS_DIR / "monitor",
+        )
+        monitor_metrics = state_store.get_monitor_metrics(latest_run.get("run_id"))
+        current_profile = get_model_info().get("profile", "")
+        benchmark_record = state_store.get_latest_benchmark_record(
+            profile_name=current_profile,
+            benchmark_prefix=FIXED_BENCHMARK_SLICE_NAME,
+        )
+        if not benchmark_record:
+            benchmark_record = state_store.get_latest_benchmark_record(
+                benchmark_prefix=FIXED_BENCHMARK_SLICE_NAME,
+            )
+        benchmark_metrics = benchmark_record.get("metrics", {})
+        return {
+            "validation_pass_rate": f"{pass_rate}%",
+            "checkpoint_status": "yes" if latest_run.get("last_checkpoint") else "no",
+            "crash_frequency": f"{crash_runs}/{max(1, len(runs))}",
+            "reward_total": round(sum(run_rewards), 2),
+            "loop_detection_rate": loop_detection_rate,
+            "compression_rate": compression_rate,
+            "task_phase": monitor_metrics.get("task_phase", "—") or "—",
+            "task_step": monitor_metrics.get("task_step", "—"),
+            "last_failure_type": monitor_metrics.get("last_failure_type", "—") or "—",
+            "task_target_files": monitor_metrics.get("task_target_files", []),
+            "benchmark_name": benchmark_record.get("benchmark_name", "—") or "—",
+            "benchmark_avg_tok_s": benchmark_metrics.get("avg_tok_s", "—"),
+            "benchmark_elapsed_s": benchmark_metrics.get("elapsed_s", "—"),
+        }
+    except Exception:
+        return {
+            "validation_pass_rate": "—",
+            "checkpoint_status": "—",
+            "crash_frequency": "—",
+            "reward_total": "—",
+            "loop_detection_rate": "—",
+            "compression_rate": "—",
+            "task_phase": "—",
+            "task_step": "—",
+            "last_failure_type": "—",
+            "task_target_files": [],
+            "benchmark_name": "—",
+            "benchmark_avg_tok_s": "—",
+            "benchmark_elapsed_s": "—",
+        }
 
 
 def get_latest_log_entry() -> tuple[dict, str]:
@@ -348,7 +515,9 @@ def build_dashboard() -> Layout:
     mem = get_memory()
     perf = get_perf()
     stats = get_cycle_stats()
+    controller_metrics = get_controller_metrics()
     model = get_model_info()
+    gpu_mem = get_gpu_memory_info()
     last_event, log_status = get_latest_log_entry()
     brain = get_skill_tree_status()
     live_logs = get_live_agent_logs()
@@ -376,6 +545,7 @@ def build_dashboard() -> Layout:
     model_table.add_row("Model Size", f"{model.get('model_size_gb', '?')} GB")
     model_table.add_row("Context", f"{model.get('context_window', 0):,} tokens")
     model_table.add_row("Max Tokens", f"{model.get('max_tokens', 0):,} tokens")
+    model_table.add_row("Bench Slice", str(controller_metrics.get("benchmark_name", "—"))[:36])
 
     # Hardware
     hw_table = Table(title="Hardware", expand=False, box=box.ROUNDED, padding=(0, 1))
@@ -384,6 +554,9 @@ def build_dashboard() -> Layout:
     hw_table.add_row("Total RAM", f"{mem['total_gb']:.1f} GB")
     hw_table.add_row("Used", f"{mem['used_gb']:.1f} GB ({mem['percent']}%)")
     hw_table.add_row("Free", f"{mem['free_gb']:.1f} GB")
+    hw_table.add_row("GPU Device", str(gpu_mem.get("device", "—"))[:24])
+    hw_table.add_row("GPU Shared", f"{gpu_mem.get('shared_total_gb', '—')} GB")
+    hw_table.add_row("GPU Free", f"{gpu_mem.get('shared_free_gb', '—')} GB")
 
     # GPU utilization from resources.jsonl (last 20 samples)
     gpu_busy_pct = "—"
@@ -401,6 +574,7 @@ def build_dashboard() -> Layout:
     except Exception:
         pass
     hw_table.add_row("GPU Busy", gpu_busy_pct)
+    hw_table.add_row("GPU Status", str(gpu_mem.get("status", "—"))[:24])
 
     # Agent Process
     agent_table = Table(title="Agent", expand=False, box=box.ROUNDED, padding=(0, 1))
@@ -437,6 +611,12 @@ def build_dashboard() -> Layout:
     perf_table.add_row("Gen tokens", f"{perf.get('gen_tokens', '—')}")
     perf_table.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
     perf_table.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
+    perf_table.add_row("Validations", str(controller_metrics.get("validation_pass_rate", "—")))
+    perf_table.add_row("Checkpoint", str(controller_metrics.get("checkpoint_status", "—")))
+    perf_table.add_row("Compress", str(controller_metrics.get("compression_rate", "—")))
+    perf_table.add_row("Task Phase", str(controller_metrics.get("task_phase", "—")))
+    perf_table.add_row("Task Step", str(controller_metrics.get("task_step", "—")))
+    perf_table.add_row("Bench tok/s", str(controller_metrics.get("benchmark_avg_tok_s", "—")))
 
     # Self-Improvement Cycles
     cycle_table = Table(title="Cycles", expand=False, box=box.ROUNDED, padding=(0, 1))
@@ -446,6 +626,11 @@ def build_dashboard() -> Layout:
     cycle_table.add_row("PASSED", f"[green]{stats['passed']}[/]")
     cycle_table.add_row("FAILED", f"[red]{stats['failed']}[/]")
     cycle_table.add_row("DELETED", str(stats["deleted"]))
+    cycle_table.add_row("Crash Freq", str(controller_metrics.get("crash_frequency", "—")))
+    cycle_table.add_row("Reward", str(controller_metrics.get("reward_total", "—")))
+    cycle_table.add_row("Loop Rate", str(controller_metrics.get("loop_detection_rate", "—")))
+    cycle_table.add_row("Last Failure", str(controller_metrics.get("last_failure_type", "—"))[:24])
+    cycle_table.add_row("Bench secs", str(controller_metrics.get("benchmark_elapsed_s", "—")))
 
     # Live Agent Logs (structured events)
     logs_panel = Panel(

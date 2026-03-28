@@ -27,19 +27,22 @@ CONFIG = AgentConfig(
         "fast": ModelConfig(
             name="mlx-community/Qwen3.5-9B-MLX-4bit",
             max_tokens=4096,
-            context_window=131_072,  # 128K context
+            context_window=32_768,
         ),
         "balanced": ModelConfig(
-            name="mlx-community/Qwen3-30B-A3B-4bit",
+            name="mlx-community/Qwen3.5-27B-4bit",
             max_tokens=4096,
-            context_window=12_288,  # 12K safe limit for 36GB M4 Max
+            context_window=32_768,
         ),
-        # Qwen3-Coder: purpose-built for agentic coding, 70.6% SWE-Bench
-        # Same MoE arch as balanced (30B total, 3B active), same memory footprint
-        "coder": ModelConfig(
-            name="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit",
+        "primary": ModelConfig(
+            name="mlx-community/Qwen3-32B-4bit",
             max_tokens=4096,
-            context_window=12_288,
+            context_window=32_768,
+        ),
+        "benchmark_coder": ModelConfig(
+            name="mlx-community/Qwen2.5-Coder-32B-Instruct-4bit",
+            max_tokens=4096,
+            context_window=32_768,
         ),
         "quality": ModelConfig(
             name="mlx-community/Qwen3-32B-4bit",
@@ -54,19 +57,28 @@ CONFIG = AgentConfig(
             max_tokens=4096,
             context_window=32_768,
         ),
-        # Qwen3-Coder: purpose-built for coding agents, 256K context
         "coder": ModelConfig(
             name="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit",
+            max_tokens=4096,
+            context_window=32_768,
+        ),
+        "benchmark_tools": ModelConfig(
+            name="mlx-community/gemma-3-27b-it-4bit",
+            max_tokens=4096,
+            context_window=32_768,
+        ),
+        "benchmark_judge": ModelConfig(
+            name="mlx-community/DeepSeek-R1-Distill-Qwen-14B-4bit",
             max_tokens=4096,
             context_window=32_768,
         ),
         "tool_calling": ModelConfig(
             name="mlx-community/Qwen3-14B-4bit",
             max_tokens=4096,
-            context_window=16_384,
+            context_window=32_768,
         ),
     },
-    max_iterations=25,  # more iterations = more KV cache = more RAM
+    max_iterations=40,
     output_dir=SKILLS_DIR,
     web_search_timeout=10,
     code_execution_timeout=30,

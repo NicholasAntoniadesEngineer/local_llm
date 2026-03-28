@@ -18,6 +18,10 @@ class AgentLogger:
         self.log_file = self.run_dir / "events.jsonl"
         self.start_time = time.time()
         self._event_num = 0
+        try:
+            (self.run_dir / "run_id.txt").write_text(self.run_id)
+        except Exception:
+            pass
 
     def _write(self, event: dict):
         self._event_num += 1

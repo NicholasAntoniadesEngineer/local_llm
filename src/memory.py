@@ -5,6 +5,9 @@ from pathlib import Path
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
+from src.paths import RUNS_DIR
+from src.runtime.state_store import STATE_FILE
+
 
 @dataclass
 class Iteration:
@@ -61,9 +64,9 @@ class SessionMemory:
         Returns list of dicts with: goal, successes, failures, key_learning
         """
         if session_dir is None:
-            session_dir = Path.home() / ".claude" / "sessions"
+            session_dir = RUNS_DIR / "sessions"
         if not session_dir.exists():
-            return []
+            session_dir.mkdir(parents=True, exist_ok=True)
 
         goal_words = set(goal.lower().split())
         scored = []
@@ -87,6 +90,25 @@ class SessionMemory:
             except Exception:
                 continue
 
+        if STATE_FILE.exists():
+            try:
+                payload = json.loads(STATE_FILE.read_text())
+                for record in payload.get("validation_records", [])[-100:]:
+                    summary_text = record.get("summary", "")
+                    summary_words = set(summary_text.lower().split())
+                    overlap = len(goal_words & summary_words)
+                    union = len(goal_words | summary_words)
+                    sim = overlap / max(1, union)
+                    if sim > 0.1:
+                        scored.append((sim, {
+                            "goal": record.get("summary", "")[:120],
+                            "successes": [record.get("summary", "")[:80]] if record.get("accepted") else [],
+                            "failures": [] if record.get("accepted") else [record.get("summary", "")[:80]],
+                            "tools_used": 0,
+                        }))
+            except Exception:
+                pass
+
         scored.sort(key=lambda x: x[0], reverse=True)
         return [s[1] for s in scored[:n]]
 
@@ -96,7 +118,7 @@ class MemoryManager:
 
     def __init__(self, goal: str, session_dir: Path = None):
         if session_dir is None:
-            session_dir = Path.home() / ".claude" / "sessions"
+            session_dir = RUNS_DIR / "sessions"
         self.session_dir = session_dir
         self.session_dir.mkdir(parents=True, exist_ok=True)
 

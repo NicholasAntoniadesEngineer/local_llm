@@ -1,5 +1,7 @@
 import os
 import ast
+import importlib.util
+import subprocess
 from typing import Dict, List, Tuple
 
 class SelfEvaluator:
@@ -94,8 +96,9 @@ class SelfEvaluator:
             missing_modules = []
             for module in all_imports:
                 try:
-                    importlib.util.find_spec(module)
-                except ValueError:
+                    if module and importlib.util.find_spec(module) is None:
+                        missing_modules.append(module)
+                except (ValueError, ModuleNotFoundError):
                     missing_modules.append(module)
             return missing_modules
         except Exception as e:
@@ -107,22 +110,43 @@ class SelfEvaluator:
             # Check if file exists
             if not os.path.exists(file_path):
                 return False, f"File not found: {file_path}"
-            
-            # Run tests using subprocess
-            result = subprocess.run([
-                "python3",
-                "-m",
-                "unittest",
-                file_path
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10)
-            
-            if result.returncode == 0:
+
+            env = os.environ.copy()
+            skills_dir = os.path.dirname(os.path.abspath(file_path))
+            env["PYTHONPATH"] = skills_dir + ":" + env.get("PYTHONPATH", "")
+
+            direct_result = subprocess.run(
+                ["python3", file_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+
+            if (
+                direct_result.returncode == 0
+                and "ALL TESTS PASSED" in direct_result.stdout
+                and "Traceback" not in direct_result.stderr
+            ):
                 return True, "All tests passed"
-            else:
-                return False, f"Test failures:\n{result.stderr}"
+
+            unittest_result = subprocess.run(
+                ["python3", "-m", "unittest", file_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=env,
+            )
+            if unittest_result.returncode == 0:
+                return True, "All tests passed"
+
+            failure_output = (
+                direct_result.stdout
+                + direct_result.stderr
+                + unittest_result.stdout
+                + unittest_result.stderr
+            )
+            return False, f"Test failures:\n{failure_output[:300]}"
         except Exception as e:
             return False, f"Error running tests: {str(e)}"
 
