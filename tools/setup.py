@@ -14,9 +14,13 @@ from pathlib import Path
 
 # Models to download (ordered by priority)
 MODELS = [
-    ("mlx-community/Qwen3-14B-4bit", "8GB", "Best tool calling (0.971 F1)"),
-    ("mlx-community/Qwen3-30B-A3B-4bit", "16GB", "MoE: smart like 30B, fast like 3B"),
-    ("mlx-community/Qwen3.5-9B-MLX-4bit", "5GB", "Fast, good for quick tasks"),
+    (
+        "mlx-community/Qwen3-14B-4bit",
+        "~8GB",
+        "Default improve: AGENT_MODEL=fast (TurboQuant-compatible); tool_calling_14b uses same weights",
+    ),
+    ("mlx-community/Qwen3-32B-4bit", "~18GB", "Stronger codegen: AGENT_MODEL=tool_calling"),
+    ("mlx-community/Qwen3-30B-A3B-4bit", "16GB", "MoE coder: AGENT_MODEL=coder"),
 ]
 
 # Python packages
@@ -172,13 +176,24 @@ Monitor hardware (separate terminal):
   macmon
 
 Available models (set AGENT_MODEL env var):
-  fast         - Qwen3.5 9B (5GB, quick tasks)
+  fast         - Qwen3 14B (~8GB, default improve loop, TurboQuant + ~40k context)
   balanced     - Qwen3 30B MoE (16GB, best quality/speed)
   quality      - Qwen3.5 27B (14GB, highest quality)
-  tool_calling - Qwen3 14B (8GB, best tool calling)
+  tool_calling - Qwen3 32B (~18GB, strongest codegen)
+  tool_calling_14b - Qwen3 14B (8GB, lighter)
 
 Example:
-  AGENT_MODEL=balanced KMP_DUPLICATE_LIB_OK=TRUE python improve.py 1 --loop
+  AGENT_MODEL=tool_calling KMP_DUPLICATE_LIB_OK=TRUE python improve.py 1 --loop
+
+Agent rules and frozen prompt (KV message 0): see AGENT_RULES.md at repo root.
+
+Optional TurboQuant-MLX KV cache (longer context / lower memory on M-series):
+  ./tools/install_turboquant_mlx.sh
+  (Do not use raw pip install git+... on Python 3.14 — use this script; see requirements-turboquant.txt.)
+  MLX_USE_TURBO_KV=0  # to disable and use default mlx-lm KV cache
+
+Self-improve loop (`tools/improve.py`) applies defaults automatically (see src/config.py:
+  self_improve_setdefault_turbo_kv, self_improve_turbo_bits, self_improve_turbo_fp16_edge_layers).
 """)
 
 

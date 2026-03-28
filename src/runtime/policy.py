@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+
+def skill_relative_path_from_goal(goal_text: str) -> str | None:
+    """Resolve skills/foo.py from a skill-tree goal line 'File: foo.py'."""
+    match = re.search(r"File:\s*(\S+\.py)", goal_text)
+    if not match:
+        return None
+    return f"skills/{match.group(1)}"
 
 from src.paths import RUNS_DIR
 from src.runtime.tool_kinds import READ_BATCH_SAFE_TOOLS
@@ -127,6 +136,7 @@ class PolicyEngine:
         last_result: str,
         memory_manager,
         current_skill: dict[str, Any] | None,
+        recent_tool_names: list[str] | None = None,
     ) -> StepPolicy:
         confidence = self.confidence_snapshot(step, max_iterations, perf, files_written, last_result, memory_manager)
         guidance_messages: list[str] = []
@@ -164,6 +174,21 @@ class PolicyEngine:
             except Exception:
                 suggested_tool = ""
 
+        recent_names = list(recent_tool_names or [])
+        web_search_count = sum(1 for name in recent_names if name == "web_search")
+        read_like_count = sum(1 for name in recent_names if name in ("read_file", "list_dir"))
+        if web_search_count >= 1 and read_like_count < 1:
+            suggested_tool = "read_file"
+            guidance_messages.append(
+                "External search already used this task: next tool must be read_file (or list_dir) on the target skill file, not web_search."
+            )
+        elif web_search_count >= 2 and files_written == 0 and phase in ("inspect", "plan", "discover"):
+            target_hint = skill_relative_path_from_goal(self.goal)
+            if target_hint:
+                guidance_messages.append(
+                    f"Enough web_search steps: open {target_hint} with read_file, then replace_lines, edit_file, or write_file."
+                )
+
         if confidence["overall"] < self.config.low_confidence_threshold:
             guidance_messages.append(
                 "Confidence is low. Read code or gather evidence before writing more code."
@@ -200,7 +225,13 @@ class PolicyEngine:
                 break
         return selected_calls or tool_calls[:1]
 
-    def fallback_tool_call(self, phase: str, goal: str, suggested_tool: str = "") -> dict[str, Any]:
+    def fallback_tool_call(
+        self,
+        phase: str,
+        goal: str,
+        suggested_tool: str = "",
+        recent_tool_names: list[str] | None = None,
+    ) -> dict[str, Any]:
         phase_defaults = {
             "discover": "web_search",
             "inspect": "read_file",
@@ -212,6 +243,12 @@ class PolicyEngine:
             "save": "write_file",
         }
         preferred_tool = suggested_tool or phase_defaults.get(phase, "read_file")
+        recent_names = list(recent_tool_names or [])
+        if preferred_tool == "web_search" and any(name == "web_search" for name in recent_names[-6:]):
+            skill_path = skill_relative_path_from_goal(goal)
+            if skill_path:
+                return {"name": "read_file", "arguments": {"path": skill_path}}
+            return {"name": "list_dir", "arguments": {"path": "skills"}}
         if preferred_tool == "web_search":
             return {"name": "web_search", "arguments": {"query": goal[:80]}}
         if preferred_tool == "read_file":

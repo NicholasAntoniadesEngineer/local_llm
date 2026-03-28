@@ -1,4 +1,4 @@
-"""Agent configuration for M4 Max (36GB). Conservative GPU to prevent Metal OOM kernel panics."""
+"""Agent configuration for M4 Max (36GB). Defaults tuned for long self-improve runs on unified memory."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,14 +20,20 @@ class AgentConfig:
     web_search_timeout: int
     code_execution_timeout: int
     max_search_results: int
+    # Self-improve loop (`tools/improve.py`): defaults applied via `self_improve_runtime` unless env already set.
+    self_improve_setdefault_turbo_kv: bool = True
+    self_improve_turbo_bits: int = 3
+    self_improve_turbo_fp16_edge_layers: int = 4
 
 
 CONFIG = AgentConfig(
     models={
         "fast": ModelConfig(
-            name="mlx-community/Qwen3.5-9B-MLX-4bit",
+            name="mlx-community/Qwen3-14B-4bit",
             max_tokens=4096,
-            context_window=32_768,
+            # Qwen3 dense decoder: TurboQuant-compatible (not Qwen3.5 hybrid/ArraysCache).
+            # HF max_position_embeddings=40960 for this MLX port.
+            context_window=40_960,
         ),
         "balanced": ModelConfig(
             name="mlx-community/Qwen3.5-27B-4bit",
@@ -72,8 +78,15 @@ CONFIG = AgentConfig(
             max_tokens=4096,
             context_window=32_768,
         ),
-        "tool_calling": ModelConfig(
+        "tool_calling_14b": ModelConfig(
             name="mlx-community/Qwen3-14B-4bit",
+            max_tokens=4096,
+            context_window=32_768,
+        ),
+        # Default improve loop: AGENT_MODEL=fast (Qwen3 14B, ~40k context, TurboQuant OK).
+        # Stronger: AGENT_MODEL=tool_calling (32B). Same weights as fast: tool_calling_14b (32k budget).
+        "tool_calling": ModelConfig(
+            name="mlx-community/Qwen3-32B-4bit",
             max_tokens=4096,
             context_window=32_768,
         ),
@@ -83,4 +96,7 @@ CONFIG = AgentConfig(
     web_search_timeout=10,
     code_execution_timeout=30,
     max_search_results=5,
+    self_improve_setdefault_turbo_kv=True,
+    self_improve_turbo_bits=3,
+    self_improve_turbo_fp16_edge_layers=4,
 )

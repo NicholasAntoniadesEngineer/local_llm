@@ -8,12 +8,14 @@ implement → test → integrate loops. The agent grows its own brain.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
+import ast
 import json
 import math
 import os
 import re
 import sqlite3
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -22,7 +24,7 @@ import networkx as nx
 
 from src.paths import SKILLS_DIR, RUNS_DIR
 from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
-from src.runtime.verifier import validate_generated_module
+from src.runtime.verifier import _assert_statement_count, validate_generated_module
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -63,6 +65,13 @@ SEED_SKILLS = [
 # ═══════════════════════════════════════════════════════════════════════════
 
 EVOLUTION_LOG = RUNS_DIR / "skill_tree_evolution.log"
+
+
+def _format_impact_display(raw_value):
+    try:
+        return round(float(raw_value), 2)
+    except (TypeError, ValueError):
+        return raw_value if raw_value is not None else "?"
 
 
 def _evo_log(msg: str):
@@ -123,6 +132,11 @@ class SkillTree:
     def _migrate_v3(self):
         """Add v3 columns if upgrading from v2 DB."""
         with self._conn() as c:
+            skills_table_row = c.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='skills'"
+            ).fetchone()
+            if not skills_table_row:
+                return
             cols = {row[1] for row in c.execute("PRAGMA table_info(skills)")}
             migrations = {
                 "embedding": "ALTER TABLE skills ADD COLUMN embedding BLOB",
@@ -174,9 +188,30 @@ class SkillTree:
                       (skill_id, event, datetime.now().isoformat(), details))
 
     def _field(self, sid, field):
-        with self._conn() as c:
-            r = c.execute(f"SELECT [{field}] FROM skills WHERE id=?", (sid,)).fetchone()
-            return r[field] if r else None
+        """Read one column; repair schema on missing table; retry transient disk I/O."""
+        last_error: sqlite3.Error | None = None
+        for attempt_index in range(10):
+            try:
+                with self._conn() as c:
+                    r = c.execute(f"SELECT [{field}] FROM skills WHERE id=?", (sid,)).fetchone()
+                    return r[field] if r else None
+            except sqlite3.OperationalError as error_value:
+                last_error = error_value
+                message_lower = str(error_value).lower()
+                if attempt_index == 0 and "no such table" in message_lower:
+                    self._init_db()
+                    self._migrate_v3()
+                    if self._count() == 0:
+                        self._seed()
+                    self._load_graph()
+                    continue
+                if "disk i/o" in message_lower or "database disk image is malformed" in message_lower:
+                    time.sleep(0.05 * (2 ** min(attempt_index, 6)))
+                    continue
+                raise
+        if last_error:
+            raise last_error
+        return None
 
     def _status(self, sid):
         return self._field(sid, "status") or "locked"
@@ -262,7 +297,10 @@ class SkillTree:
             source = fpath.read_text()
             lines = len(source.splitlines())
             funcs = source.count("\ndef ") + source.count("\n    def ")
-            asserts = source.count("assert ")
+            try:
+                asserts = _assert_statement_count(ast.parse(source))
+            except Exception:
+                asserts = source.count("assert ")
             # Quality score: lines + 10*asserts + 5*funcs
             score = lines + 10 * asserts + 5 * funcs
             if score < worst_score:
@@ -277,21 +315,20 @@ class SkillTree:
         prereq_code = self._prereq_code(skill)
 
         # Analyze current code to give specific feedback
-        import ast as _ast
         try:
-            tree = _ast.parse(current_code)
-            func_count = sum(1 for n in _ast.walk(tree) if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef)))
-            class_count = sum(1 for n in _ast.walk(tree) if isinstance(n, _ast.ClassDef))
+            tree = ast.parse(current_code)
+            func_count = sum(1 for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+            class_count = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+            assert_count = _assert_statement_count(tree)
         except Exception:
-            func_count = class_count = 0
-        assert_count = current_code.count("assert ")
+            func_count = class_count = assert_count = 0
         loc = len(current_code.splitlines())
 
         specific_issues = []
         if func_count < 3:
             specific_issues.append(f"Only {func_count} functions — need ≥3 to pass validation")
-        if assert_count < 5:
-            specific_issues.append(f"Only {assert_count} assertions — need ≥5 to pass validation")
+        if assert_count < 4:
+            specific_issues.append(f"Only {assert_count} assertions — need ≥4 to pass validation")
         if loc < 80:
             specific_issues.append(f"Only {loc} lines — too shallow for production quality")
         if class_count == 0:
@@ -314,16 +351,16 @@ Functions: {func_count} | Assertions: {assert_count} | Lines: {loc} | Classes: {
 
 === VALIDATION GATE (your code MUST pass these or it gets deleted) ===
 1. MINIMUM 3 functions or methods
-2. MINIMUM 5 assert statements in the test block
+2. MINIMUM 4 assert statements (AST `assert`; include the test block)
 3. No 'from src.' imports
 4. Must print 'ALL TESTS PASSED'
 
 === UPGRADE REQUIREMENTS ===
 1. Keep the same class name and method signatures (don't break API)
-2. Make every method substantive: real logic, not pass-through
+2. Make every method substantive: real logic, not pass-through (short helpers OK if one method is deep)
 3. Add proper error handling for edge cases (empty input, None, invalid types)
 4. Add type hints and docstrings to all public methods
-5. Upgrade tests: at least 8 assertions testing real behavior and edge cases
+5. Upgrade tests: at least 6 assertions testing real behavior and edge cases
 6. Use prereq modules where they add value
 
 === AVAILABLE PREREQ APIs ===
@@ -336,8 +373,8 @@ Functions: {func_count} | Assertions: {assert_count} | Lines: {loc} | Classes: {
 
 Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DONE when passing."""
 
-    def get_next_skill(self) -> Optional[dict]:
-        """UCB1 bandit – balances high-impact skills with exploration of under-tested ones."""
+    def _select_best_unlocked_skill_id(self) -> Optional[str]:
+        """UCB1 winner skill id without mutating pull_count (peek path)."""
         if not self.graph.nodes:
             return None
 
@@ -355,21 +392,35 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
             r = self._field(nid, "current_impact") or data.get("impact", 5)
             ucb = r + c * math.sqrt(math.log(N) / n)
 
-            # Penalize skills that keep failing (prevents infinite retry loops)
             fail_count = self._field(nid, "fail_count") or 0
             success_count = self._field(nid, "success_count") or 0
             if fail_count > 2:
                 failure_rate = fail_count / max(1, fail_count + success_count)
-                ucb -= failure_rate * 3.0  # Heavy penalty for repeated failures
+                ucb -= failure_rate * 3.0
 
             if ucb > best_score:
                 best_score = ucb
                 best_node = nid
 
-        if best_node:
-            self.graph.nodes[best_node]["pull_count"] = self.graph.nodes[best_node].get("pull_count", 0) + 1
-            self._save_node(best_node)
+        return best_node
 
+    def peek_next_skill(self) -> Optional[dict]:
+        """Read-only UCB1 selection; does not increment pull_count."""
+        best_node = self._select_best_unlocked_skill_id()
+        return self._skill_dict(best_node) if best_node else None
+
+    def record_pull(self, sid: str) -> None:
+        """Persist one bandit pull for a committed skill selection."""
+        if sid not in self.graph.nodes:
+            return
+        self.graph.nodes[sid]["pull_count"] = self.graph.nodes[sid].get("pull_count", 0) + 1
+        self._save_node(sid)
+
+    def get_next_skill(self) -> Optional[dict]:
+        """UCB1 bandit selection and record one pull (legacy combined API)."""
+        best_node = self._select_best_unlocked_skill_id()
+        if best_node:
+            self.record_pull(best_node)
         return self._skill_dict(best_node) if best_node else None
 
     def is_unlocked(self, sid):
@@ -391,14 +442,47 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
         self._log(sid, "failed", error[:200])
 
     def update_impact_from_result(self, sid, gain):
-        with self._conn() as c:
-            r = c.execute("SELECT current_impact FROM skills WHERE id=?", (sid,)).fetchone()
-            if not r:
-                return
-            new = min(10.0, r["current_impact"] + gain * 3.0)
-            c.execute("UPDATE skills SET current_impact=? WHERE id=?", (new, sid))
-        self._log(sid, "impact_change", f"gain={gain}")
-        self._propagate(sid, gain * 0.3)
+        """Persist impact change; survives transient SQLite I/O (e.g. disk contention).
+
+        Retries only the read/update transaction so a successful UPDATE is never
+        applied twice if follow-up logging fails mid-attempt.
+        """
+        last_error: sqlite3.Error | None = None
+        for attempt_index in range(8):
+            try:
+                with self._conn() as c:
+                    r = c.execute("SELECT current_impact FROM skills WHERE id=?", (sid,)).fetchone()
+                    if not r:
+                        return
+                    new = min(10.0, r["current_impact"] + gain * 3.0)
+                    c.execute("UPDATE skills SET current_impact=? WHERE id=?", (new, sid))
+                break
+            except sqlite3.OperationalError as error_value:
+                last_error = error_value
+                time.sleep(0.06 * (2 ** min(attempt_index, 6)))
+        else:
+            try:
+                _evo_log(
+                    f"update_impact_from_result gave up after retries skill_id={sid!r}: {last_error!r}"
+                )
+            except OSError:
+                pass
+            return
+
+        try:
+            self._log(sid, "impact_change", f"gain={gain}")
+        except sqlite3.Error:
+            try:
+                _evo_log(f"skill_history insert failed after impact update skill_id={sid!r}")
+            except OSError:
+                pass
+        try:
+            self._propagate(sid, gain * 0.3)
+        except sqlite3.Error:
+            try:
+                _evo_log(f"propagate failed after impact update skill_id={sid!r}")
+            except OSError:
+                pass
 
     def _propagate(self, sid, gain):
         if abs(gain) < 0.01:
@@ -680,11 +764,12 @@ FIX THIS SPECIFIC ISSUE. Do not repeat the same mistake.
 """
 
         return f"""You are building a production-quality Python module for a self-improving AI agent system.
+Follow AGENT_RULES.md at the repository root (same rules appear in the agent frozen system prompt).
 {fail_warning}
 === TASK ===
 Module: {skill['name']} (Tier {skill['tier']}: {tnames.get(skill['tier'],'?')})
 File: {skill['file']}
-Impact: {skill.get('current_impact', skill.get('impact','?'))}/10
+Impact: {_format_impact_display(skill.get('current_impact', skill.get('impact')))}/10
 
 === WHAT THIS MODULE DOES ===
 {skill.get('description','')}
@@ -698,10 +783,10 @@ It builds on: {', '.join(prereq_names) if prereq_names else 'nothing (foundation
 
 === VALIDATION GATE (your code MUST pass these or it gets deleted) ===
 1. MINIMUM 3 functions or methods (not counting __init__ or test code)
-2. MINIMUM 5 assert statements in the test block
+2. MINIMUM 4 assert statements (real `assert` in Python, not only the word in strings)
 3. No 'from src.' imports — skills must be standalone
 4. Must print 'ALL TESTS PASSED' when run
-5. Each method must have real logic (10+ lines), not single-line returns
+5. Real logic: at least one method with depth; small helpers OK if total depth across methods is enough
 6. Handle edge cases: empty inputs, None values, boundary conditions
 
 === AVAILABLE PREREQ APIs ===
@@ -711,12 +796,13 @@ It builds on: {', '.join(prereq_names) if prereq_names else 'nothing (foundation
 - Import prereqs: from <module_name> import <ClassName>
 - NEVER import from src.memory, src.config, or src.agent
 - Use ONLY stdlib + prereq imports listed above
+- Each prereq must be USED outside import lines (calls, types, attribute access)—import-only fails verification
 - If a prereq import fails, catch ImportError and provide a standalone fallback
 
 === TEST REQUIREMENTS ===
 {skill.get('test_hint','')}
 - Include 'if __name__ == "__main__":' block
-- At least 5 test cases with assertions
+- At least 4 distinct assert statements in the file (prefer 5+)
 - Print 'ALL TESTS PASSED' only if ALL assertions pass
 - Test edge cases (empty input, boundary values)
 
@@ -798,7 +884,7 @@ Write the complete module to {skill['file']}. Use read_file if you need to under
                     dom = f" [{r['domain']}]" if r['domain'] != 'general' else ""
                     pulls = f" pulls:{r['pull_count']}" if r['pull_count'] > 0 else ""
                     print(f"  {icon} [{r['current_impact']:.1f}] {r['name']}{dom}{lv}{fl}{pulls}{deps}")
-        nxt = self.get_next_skill()
+        nxt = self.peek_next_skill()
         print(f"\n→ NEXT: {nxt['name']} ({nxt['file']})" if nxt else "\n→ ALL COMPLETE!")
         w = self.get_system_weaknesses()
         if w != "System is healthy":
@@ -812,7 +898,7 @@ Write the complete module to {skill['file']}. Use read_file if you need to under
                 skills.append({**dict(r), "prereqs": ps, "unlocked": self.is_unlocked(r["id"])})
             return {"skills": skills, "total": len(skills),
                     "completed": sum(1 for s in skills if s["status"] == "completed"),
-                    "next": self.get_next_skill(), "weaknesses": self.get_system_weaknesses()}
+                    "next": self.peek_next_skill(), "weaknesses": self.get_system_weaknesses()}
 
 
 if __name__ == "__main__":

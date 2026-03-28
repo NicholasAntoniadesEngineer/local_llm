@@ -41,7 +41,7 @@ except ImportError:
     sys.exit(1)
 
 # ── Dynamic paths (never hardcoded) ─────────────────────────────────────
-from src.paths import RUNS_DIR as PATHS_RUNS_DIR
+from src.paths import IMPROVE_SESSION_FILE, PROPOSALS_FILE, RUNS_DIR as PATHS_RUNS_DIR
 from src.runtime.benchmark_suite import FIXED_BENCHMARK_SLICE_NAME
 from src.runtime.state_store import PersistentStateStore, STATE_FILE
 
@@ -49,7 +49,6 @@ from src.runtime.state_store import PersistentStateStore, STATE_FILE
 RUNS_DIR = PATHS_RUNS_DIR
 LOGS_DIR = Path("./skills/logs")
 EVOLUTION_LOG = RUNS_DIR / "skill_tree_evolution.log"
-TMP_IMPROVE_LOG = Path("/tmp/improve_loop.log")
 
 # ── Global singleton SkillTree + cache (prevents crashes) ─────────────────────
 _tree_instance = None
@@ -223,7 +222,7 @@ def get_model_info() -> dict:
     # Fallback to config
     try:
         from src.config import CONFIG
-        model_key = os.environ.get("AGENT_MODEL", "tool_calling")
+        model_key = os.environ.get("AGENT_MODEL", "fast")
         if model_key in CONFIG.models:
             m = CONFIG.models[model_key]
             info.update({
@@ -332,15 +331,31 @@ def get_perf() -> dict:
 
 def get_cycle_stats() -> dict:
     try:
-        content = TMP_IMPROVE_LOG.read_text() if TMP_IMPROVE_LOG.exists() else ""
+        if not IMPROVE_SESSION_FILE.exists():
+            return {"cycles": 0, "passed": 0, "failed": 0, "deleted": 0, "idle": 0}
+        lines = [line for line in IMPROVE_SESSION_FILE.read_text().splitlines() if line.strip()]
+        passed = failed = idle = 0
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            outcome = row.get("outcome", "")
+            if outcome in ("accepted", "pre_validated"):
+                passed += 1
+            elif outcome == "failed":
+                failed += 1
+            elif outcome == "idle":
+                idle += 1
         return {
-            "cycles": content.count("CYCLE #"),
-            "passed": content.count("PASSED"),
-            "failed": content.count("FAILED"),
-            "deleted": content.count("Deleted"),
+            "cycles": len(lines),
+            "passed": passed,
+            "failed": failed,
+            "deleted": 0,
+            "idle": idle,
         }
     except Exception:
-        return {"cycles": 0, "passed": 0, "failed": 0, "deleted": 0}
+        return {"cycles": 0, "passed": 0, "failed": 0, "deleted": 0, "idle": 0}
 
 
 def get_controller_metrics() -> dict:
@@ -350,7 +365,8 @@ def get_controller_metrics() -> dict:
             return {
                 "validation_pass_rate": "—",
                 "checkpoint_status": "—",
-                "crash_frequency": "—",
+                "non_accepted_runs": "—",
+                "generation_stalled": False,
                 "reward_total": "—",
                 "task_phase": "—",
                 "task_step": "—",
@@ -374,10 +390,11 @@ def get_controller_metrics() -> dict:
             for record in state_payload.get("reward_records", [])
             if record.get("run_id") == latest_run_id
         ]
-        crash_runs = sum(1 for record in runs if not record.get("accepted", True))
+        non_accepted_runs = sum(1 for record in runs if not record.get("accepted", True))
         loop_detection_rate = "—"
         compression_rate = "—"
         current_run_dir = get_current_run_dir()
+        generation_stalled = False
         if current_run_dir:
             events_file = current_run_dir / "events.jsonl"
             if events_file.exists():
@@ -397,6 +414,17 @@ def get_controller_metrics() -> dict:
                 )
                 loop_detection_rate = f"{loop_count}/{max(1, step_count)}"
                 compression_rate = f"{compression_count}/{max(1, step_count)}"
+            perf_path = current_run_dir / "perf.json"
+            if perf_path.exists():
+                try:
+                    perf_payload = json.loads(perf_path.read_text())
+                    status_text = str(perf_payload.get("status", ""))
+                    generating = bool(perf_payload.get("generating"))
+                    age_s = time.time() - perf_path.stat().st_mtime
+                    if generating and ("PREFILL" in status_text or "prefill" in status_text.lower()) and age_s > 90:
+                        generation_stalled = True
+                except Exception:
+                    pass
         latest_run_dir = latest_run.get("run_dir")
         state_store = PersistentStateStore(
             latest_run.get("run_id", "monitor"),
@@ -417,7 +445,8 @@ def get_controller_metrics() -> dict:
         return {
             "validation_pass_rate": f"{pass_rate}%",
             "checkpoint_status": "yes" if latest_run.get("last_checkpoint") else "no",
-            "crash_frequency": f"{crash_runs}/{max(1, len(runs))}",
+            "non_accepted_runs": f"{non_accepted_runs}/{max(1, len(runs))}",
+            "generation_stalled": generation_stalled,
             "reward_total": round(sum(run_rewards), 2),
             "loop_detection_rate": loop_detection_rate,
             "compression_rate": compression_rate,
@@ -433,7 +462,8 @@ def get_controller_metrics() -> dict:
         return {
             "validation_pass_rate": "—",
             "checkpoint_status": "—",
-            "crash_frequency": "—",
+            "non_accepted_runs": "—",
+            "generation_stalled": False,
             "reward_total": "—",
             "loop_detection_rate": "—",
             "compression_rate": "—",
@@ -465,6 +495,15 @@ def get_latest_log_entry() -> tuple[dict, str]:
         return {}, f"Error in {latest_file.name}"
 
 
+def _count_text_file_non_empty_lines(path: Path) -> int:
+    try:
+        if not path.exists():
+            return 0
+        return sum(1 for line in path.read_text().splitlines() if line.strip())
+    except Exception:
+        return 0
+
+
 def get_skill_tree_status() -> dict:
     global _last_brain_update, _brain_cache
     now = time.time()
@@ -480,14 +519,15 @@ def get_skill_tree_status() -> dict:
         return fallback
 
     try:
-        next_skill = tree.get_next_skill() or {"name": "Idle", "current_impact": 0.0, "pull_count": 0}
+        next_skill = tree.peek_next_skill() or {"name": "Idle", "current_impact": 0.0, "pull_count": 0}
         critical = getattr(tree, "get_critical_path", lambda: [])()[:3]
+        proposals_ready = _count_text_file_non_empty_lines(PROPOSALS_FILE)
         status = {
             "next_skill": next_skill.get("name", "Idle"),
             "next_impact": round(next_skill.get("current_impact", 0.0), 1),
             "pull_count": next_skill.get("pull_count", 0),
             "critical_path": " → ".join(critical) if critical else "None",
-            "proposals_ready": 0,
+            "proposals_ready": proposals_ready,
             "evolution_enabled": True,
         }
         _brain_cache = status
@@ -536,7 +576,9 @@ def build_dashboard() -> Layout:
     )
 
     # Model
-    model_table = Table(title="Model", expand=False, box=box.ROUNDED, padding=(0, 1))
+    model_table = Table(
+        title="Model", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     model_table.add_column("", style="cyan", width=14, no_wrap=True)
     model_table.add_column("", style="green", max_width=40)
     model_table.add_row("Name", model.get("short_name", "—"))
@@ -548,7 +590,9 @@ def build_dashboard() -> Layout:
     model_table.add_row("Bench Slice", str(controller_metrics.get("benchmark_name", "—"))[:36])
 
     # Hardware
-    hw_table = Table(title="Hardware", expand=False, box=box.ROUNDED, padding=(0, 1))
+    hw_table = Table(
+        title="Hardware", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     hw_table.add_column("", style="cyan", width=10, no_wrap=True)
     hw_table.add_column("", style="green", max_width=25)
     hw_table.add_row("Total RAM", f"{mem['total_gb']:.1f} GB")
@@ -577,7 +621,9 @@ def build_dashboard() -> Layout:
     hw_table.add_row("GPU Status", str(gpu_mem.get("status", "—"))[:24])
 
     # Agent Process
-    agent_table = Table(title="Agent", expand=False, box=box.ROUNDED, padding=(0, 1))
+    agent_table = Table(
+        title="Agent", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     agent_table.add_column("", style="cyan", width=10, no_wrap=True)
     agent_table.add_column("", style="green", max_width=20)
     if proc.get("running"):
@@ -589,7 +635,9 @@ def build_dashboard() -> Layout:
         agent_table.add_row("Status", "[bold red]NOT RUNNING[/]")
 
     # SkillTree v3 Brain
-    brain_table = Table(title="SkillTree v3", expand=False, box=box.ROUNDED, padding=(0, 1))
+    brain_table = Table(
+        title="SkillTree v3", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     brain_table.add_column("", style="cyan", width=14, no_wrap=True)
     brain_table.add_column("", style="magenta", max_width=40)
     brain_table.add_row("Next Skill (UCB1)", f"[bold]{brain['next_skill']}[/] (impact {brain['next_impact']})")
@@ -599,7 +647,9 @@ def build_dashboard() -> Layout:
     brain_table.add_row("Evolution", "[bold green]ENABLED[/]" if brain['evolution_enabled'] else "[dim]v2[/]")
 
     # Token Performance (NOW FIXED)
-    perf_table = Table(title="Performance", expand=False, box=box.ROUNDED, padding=(0, 1))
+    perf_table = Table(
+        title="Performance", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     perf_table.add_column("", style="cyan", width=14, no_wrap=True)
     perf_table.add_column("", style="green", max_width=20)
     status = perf.get('status', '—')
@@ -611,6 +661,8 @@ def build_dashboard() -> Layout:
     perf_table.add_row("Gen tokens", f"{perf.get('gen_tokens', '—')}")
     perf_table.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
     perf_table.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
+    stall_note = "YES" if controller_metrics.get("generation_stalled") else "no"
+    perf_table.add_row("Gen stalled", stall_note)
     perf_table.add_row("Validations", str(controller_metrics.get("validation_pass_rate", "—")))
     perf_table.add_row("Checkpoint", str(controller_metrics.get("checkpoint_status", "—")))
     perf_table.add_row("Compress", str(controller_metrics.get("compression_rate", "—")))
@@ -619,14 +671,17 @@ def build_dashboard() -> Layout:
     perf_table.add_row("Bench tok/s", str(controller_metrics.get("benchmark_avg_tok_s", "—")))
 
     # Self-Improvement Cycles
-    cycle_table = Table(title="Cycles", expand=False, box=box.ROUNDED, padding=(0, 1))
+    cycle_table = Table(
+        title="Cycles", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
+    )
     cycle_table.add_column("", style="cyan", width=10, no_wrap=True)
     cycle_table.add_column("", style="green", max_width=10)
     cycle_table.add_row("Total Cycles", str(stats["cycles"]))
     cycle_table.add_row("PASSED", f"[green]{stats['passed']}[/]")
     cycle_table.add_row("FAILED", f"[red]{stats['failed']}[/]")
+    cycle_table.add_row("IDLE", str(stats.get("idle", 0)))
     cycle_table.add_row("DELETED", str(stats["deleted"]))
-    cycle_table.add_row("Crash Freq", str(controller_metrics.get("crash_frequency", "—")))
+    cycle_table.add_row("Non-accept", str(controller_metrics.get("non_accepted_runs", "—")))
     cycle_table.add_row("Reward", str(controller_metrics.get("reward_total", "—")))
     cycle_table.add_row("Loop Rate", str(controller_metrics.get("loop_detection_rate", "—")))
     cycle_table.add_row("Last Failure", str(controller_metrics.get("last_failure_type", "—"))[:24])
@@ -640,21 +695,18 @@ def build_dashboard() -> Layout:
         expand=True,
     )
 
-    # Raw terminal output (tail of improve_loop.log)
     raw_log = ""
     try:
-        log_path = Path("/tmp/improve_loop.log")
-        if log_path.exists():
-            with open(log_path, "r") as f:
-                lines = f.readlines()
-                raw_log = "".join(lines[-20:])  # last 20 lines
+        if IMPROVE_SESSION_FILE.exists():
+            lines = IMPROVE_SESSION_FILE.read_text().splitlines()
+            raw_log = "\n".join(lines[-12:])
         if not raw_log.strip():
-            raw_log = "(waiting for output...)"
+            raw_log = "(no improve_session.jsonl entries yet)"
     except Exception:
-        raw_log = "(cannot read log)"
+        raw_log = "(cannot read improve journal)"
     raw_panel = Panel(
         Text(raw_log, style="dim"),
-        title="Terminal Output (live)",
+        title="Improve session (tail)",
         border_style="cyan",
         expand=True,
     )

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
+from src.paths import IMPROVE_SESSION_FILE
+from src.runtime.self_improve_runtime import apply_self_improve_runtime_environment
 from src.runtime.verifier import validate_generated_module
 from src.skill_tree import SkillTree
 
@@ -33,18 +37,27 @@ class ImprovementCycleResult:
     scenario: ImprovementScenario | None
     accepted: bool
     summary: str
+    outcome: str
+
+
+def _append_improve_journal(record: dict[str, Any]) -> None:
+    IMPROVE_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {**record, "timestamp": datetime.now().isoformat()}
+    with IMPROVE_SESSION_FILE.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, default=str) + "\n")
 
 
 def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> ImprovementScenario | None:
     """Choose the next skill build or upgrade scenario from the skill tree."""
     skill_tree.evolve_tree()
-    new_skill = skill_tree.get_next_skill()
+    new_skill = skill_tree.peek_next_skill()
     weak_skill = skill_tree.get_weakest_skill()
 
     if new_skill:
         selected_skill = new_skill
         action_name = "BUILDING"
         goal_text = skill_tree.build_goal_for_skill(selected_skill)
+        skill_tree.record_pull(selected_skill["id"])
     elif weak_skill and weak_skill.get("quality_score", 999) < 200:
         selected_skill = weak_skill
         action_name = "UPGRADING"
@@ -78,14 +91,21 @@ def run_improvement_cycle(
     agent: "MLXAgent | None" = None,
 ) -> ImprovementCycleResult:
     """Run one improvement cycle using the shared runtime controller."""
-    skill_tree = SkillTree()
+    apply_self_improve_runtime_environment()
+    # Reuse the agent's SkillTree when looping so the controller, verifier, and
+    # scenario picker share one DB handle + in-memory graph (avoids "no such table"
+    # / stale-graph races from a second SkillTree() on the same file).
+    skill_tree = agent.skill_tree if agent is not None else SkillTree()
     scenario = select_improvement_scenario(cycle_num, skill_tree)
     if scenario is None:
-        return ImprovementCycleResult(
+        result = ImprovementCycleResult(
             scenario=None,
-            accepted=True,
+            accepted=False,
             summary="All skills complete and no weak completed skill requires upgrade.",
+            outcome="idle",
         )
+        _append_improve_journal({"cycle_num": cycle_num, "outcome": result.outcome, "summary": result.summary})
+        return result
 
     scenario.target_path.parent.mkdir(parents=True, exist_ok=True)
     backup_path = scenario.target_path.with_suffix(scenario.target_path.suffix + ".bak")
@@ -100,7 +120,22 @@ def run_improvement_cycle(
         skill_tree.mark_completed(scenario.skill_id, pre_message)
         if backup_path.exists():
             backup_path.unlink()
-        return ImprovementCycleResult(scenario=scenario, accepted=True, summary=f"Pre-validated: {pre_message}")
+        result = ImprovementCycleResult(
+            scenario=scenario,
+            accepted=True,
+            summary=f"Pre-validated: {pre_message}",
+            outcome="pre_validated",
+        )
+        _append_improve_journal(
+            {
+                "cycle_num": cycle_num,
+                "outcome": result.outcome,
+                "skill_id": scenario.skill_id,
+                "target_path": str(scenario.target_path),
+                "summary": result.summary,
+            }
+        )
+        return result
 
     if agent is None:
         from src.agent import MLXAgent
@@ -140,4 +175,20 @@ def run_improvement_cycle(
         improvement_target_path=str(scenario.target_path),
         post_validation_accepted=accepted,
     )
-    return ImprovementCycleResult(scenario=scenario, accepted=accepted, summary=summary)
+    outcome = "accepted" if accepted else "failed"
+    result = ImprovementCycleResult(
+        scenario=scenario,
+        accepted=accepted,
+        summary=summary,
+        outcome=outcome,
+    )
+    _append_improve_journal(
+        {
+            "cycle_num": cycle_num,
+            "outcome": outcome,
+            "skill_id": scenario.skill_id,
+            "target_path": str(scenario.target_path),
+            "summary": summary,
+        }
+    )
+    return result

@@ -53,11 +53,27 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the full contents of a file.",
+            "description": (
+                "Read file contents from the repo root. For files longer than ~900 lines, omitting "
+                "start_line/end_line returns a numbered preview of the first chunk—then re-read with a line range. "
+                "Use numbered=true (or any range) to get LINE| prefixes for mapping grep hits to replace_lines."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative file path from project root"}
+                    "path": {"type": "string", "description": "Relative file path from project root"},
+                    "start_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based first line (inclusive)",
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Optional 1-based last line (inclusive); defaults to start+399 or EOF",
+                    },
+                    "numbered": {
+                        "type": "boolean",
+                        "description": "If true, prefix lines with N| (recommended for skill edits)",
+                    },
                 },
                 "required": ["path"],
             },
@@ -82,7 +98,10 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "Make a targeted edit to an existing file by replacing a specific string.",
+            "description": (
+                "Replace one exact occurrence of old_content with new_content. For functions or blocks, "
+                "prefer replace_lines with line numbers from read_file."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -91,6 +110,29 @@ TOOL_DEFINITIONS = [
                     "new_content": {"type": "string", "description": "Replacement string"},
                 },
                 "required": ["path", "old_content", "new_content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "replace_lines",
+            "description": (
+                "Replace lines start_line..end_line (1-based, inclusive) with the given content. "
+                "Use for multi-line refactors; empty content deletes that range. Combine with numbered read_file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path relative to project root"},
+                    "start_line": {"type": "integer", "description": "First line to replace (1-based, inclusive)"},
+                    "end_line": {"type": "integer", "description": "Last line to replace (1-based, inclusive)"},
+                    "content": {
+                        "type": "string",
+                        "description": "New text (may be multiline). Use empty string to delete the line range.",
+                    },
+                },
+                "required": ["path", "start_line", "end_line", "content"],
             },
         },
     },
@@ -201,7 +243,18 @@ class ToolExecutor:
             "web_search": lambda: self._web_search(args.get("query", "")),
             "run_python": lambda: self._run_python(args.get("code", "")),
             "bash": lambda: self._bash(args.get("cmd", "")),
-            "read_file": lambda: self._read_file(args.get("path", "")),
+            "read_file": lambda: self._read_file(
+                args.get("path", ""),
+                start_line=args.get("start_line"),
+                end_line=args.get("end_line"),
+                numbered=bool(args.get("numbered", False)),
+            ),
+            "replace_lines": lambda: self._replace_lines(
+                args.get("path", ""),
+                args.get("start_line"),
+                args.get("end_line"),
+                args.get("content", ""),
+            ),
             "write_file": lambda: self._write_file(
                 args.get("path") or args.get("file_path") or args.get("file_name", ""),
                 args.get("content", ""),
@@ -332,16 +385,125 @@ class ToolExecutor:
         except Exception as error_value:
             return f"ERROR: {error_value}", None
 
-    def _read_file(self, path_value: str) -> tuple[str, Optional[Path]]:
+    @staticmethod
+    def _format_line_slice(
+        lines: list[str],
+        start_line: int,
+        end_line: int,
+        *,
+        show_line_numbers: bool,
+    ) -> str:
+        """Return 1-based inclusive slice of lines as text."""
+        if start_line < 1:
+            start_line = 1
+        if end_line > len(lines):
+            end_line = len(lines)
+        if start_line > end_line or not lines:
+            return ""
+        chunk = lines[start_line - 1 : end_line]
+        if show_line_numbers:
+            return "\n".join(f"{start_line + index:5d}| {text}" for index, text in enumerate(chunk))
+        return "\n".join(chunk)
+
+    def _read_file(
+        self,
+        path_value: str,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        numbered: bool = False,
+    ) -> tuple[str, Optional[Path]]:
         try:
             candidate_path = Path(path_value)
             if not candidate_path.is_absolute():
                 candidate_path = ROOT / path_value
-            return candidate_path.read_text(), None
+            raw_text = candidate_path.read_text()
+            lines = raw_text.splitlines()
+            show_numbers = numbered or start_line is not None or end_line is not None
+
+            if len(lines) > 900 and start_line is None and end_line is None:
+                preview_end = min(450, len(lines))
+                body = self._format_line_slice(lines, 1, preview_end, show_line_numbers=True)
+                note = (
+                    f"\n\n[Truncated: file has {len(lines)} lines. "
+                    "Re-call read_file with start_line and end_line; keep each window under ~400 lines.]"
+                )
+                return body + note, None
+
+            if start_line is not None:
+                try:
+                    start_index = int(start_line)
+                except (TypeError, ValueError):
+                    return "ERROR: start_line must be an integer", None
+                if end_line is not None:
+                    try:
+                        end_index = int(end_line)
+                    except (TypeError, ValueError):
+                        return "ERROR: end_line must be an integer", None
+                else:
+                    end_index = min(start_index + 399, len(lines))
+                if start_index < 1:
+                    return "ERROR: start_line must be >= 1", None
+                if start_index > len(lines):
+                    return f"ERROR: start_line {start_index} past EOF ({len(lines)} lines)", None
+                end_index = max(end_index, start_index)
+                end_index = min(end_index, len(lines))
+                body = self._format_line_slice(lines, start_index, end_index, show_line_numbers=show_numbers)
+                header = f"(lines {start_index}-{end_index} of {len(lines)})\n"
+                return header + body, None
+
+            if show_numbers:
+                body = self._format_line_slice(lines, 1, len(lines), show_line_numbers=True)
+                return body, None
+            return raw_text, None
         except FileNotFoundError:
             return f"ERROR: file not found: {path_value}", None
         except Exception as error_value:
             return f"ERROR: {error_value}", None
+
+    def _replace_lines(
+        self,
+        path_value: str,
+        start_line_raw: int | None,
+        end_line_raw: int | None,
+        new_content: str,
+    ) -> tuple[str, Optional[Path]]:
+        if not path_value:
+            return "ERROR: path required", None
+        try:
+            start_line = int(start_line_raw)
+            end_line = int(end_line_raw)
+        except (TypeError, ValueError):
+            return "ERROR: start_line and end_line must be integers", None
+        if start_line < 1 or end_line < start_line:
+            return "ERROR: need 1 <= start_line <= end_line", None
+        try:
+            target_path = self._resolve_path(path_value)
+            if not target_path.exists():
+                return f"ERROR: file not found: {path_value}", None
+            current_text = target_path.read_text()
+            lines = current_text.splitlines()
+            if start_line > len(lines):
+                return f"ERROR: start_line {start_line} past EOF ({len(lines)} lines)", None
+            end_line = min(end_line, len(lines))
+            new_lines = new_content.split("\n") if new_content else []
+            head_part = lines[: start_line - 1]
+            tail_part = lines[end_line:]
+            merged_lines = head_part + new_lines + tail_part
+            had_trailing = current_text.endswith("\n")
+            updated_text = "\n".join(merged_lines)
+            if had_trailing and (merged_lines or updated_text):
+                if not updated_text.endswith("\n"):
+                    updated_text += "\n"
+            elif had_trailing and not merged_lines:
+                updated_text = ""
+            write_result, _ = self.mutation_coordinator.apply_mutation(
+                target_path, updated_text, "replace_lines"
+            )
+            if write_result.success:
+                self.files_written += 1
+            return write_result.message, write_result.path if write_result.success else None
+        except Exception as error_value:
+            return f"ERROR: replace_lines failed: {error_value}", None
 
     def _write_file(self, path_value: str, content_text: str) -> tuple[str, Optional[Path]]:
         if not path_value:

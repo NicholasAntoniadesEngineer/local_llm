@@ -13,6 +13,7 @@ OBSERVATION_TOOLS = frozenset({
 MUTATION_TOOLS = frozenset({
     "write_file",
     "edit_file",
+    "replace_lines",
 })
 
 EXECUTION_TOOLS = frozenset({

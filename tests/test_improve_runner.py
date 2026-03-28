@@ -9,12 +9,16 @@ class FakeSkillTree:
         self._new_skill = new_skill
         self._weak_skill = weak_skill
         self.evolve_calls = 0
+        self.pull_ids: list[str] = []
 
     def evolve_tree(self):
         self.evolve_calls += 1
 
-    def get_next_skill(self):
+    def peek_next_skill(self):
         return self._new_skill
+
+    def record_pull(self, skill_id: str) -> None:
+        self.pull_ids.append(skill_id)
 
     def get_weakest_skill(self):
         return self._weak_skill
@@ -44,6 +48,7 @@ class ImproveRunnerScenarioTests(unittest.TestCase):
         self.assertEqual(scenario.action, "BUILDING")
         self.assertEqual(scenario.goal_text, "build New Skill")
         self.assertEqual(scenario.target_path, Path("skills") / "new_skill.py")
+        self.assertEqual(fake_tree.pull_ids, ["skill-1"])
 
     def test_select_improvement_falls_back_to_upgrade(self):
         fake_tree = FakeSkillTree(

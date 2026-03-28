@@ -56,9 +56,10 @@ class MLXGenerationAdapter:
         self.collect_garbage_fn()
 
         prompt = format_prompt(messages)
-        stable_prefix = "\n".join(message.get("content", "") for message in messages[:2])
+        stable_prefix = messages[0].get("content", "") if messages else ""
         self.kv_cache_manager.ensure_prefix(stable_prefix)
         prompt_tokens = len(self.tokenizer.encode(prompt)) if hasattr(self.tokenizer, "encode") else len(prompt) // 4
+        self.perf["prefill_wall_time_start"] = time.time()
         self.status_writer.write_status(
             status=f"PREFILLING {prompt_tokens} tokens...",
             generating=True,

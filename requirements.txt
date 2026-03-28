@@ -1,3 +1,5 @@
+# PyPI pins when not using editable forks; for Metal builds from your fork see tools/install_mlx_fork_metal.sh
+# Optional TurboQuant KV (ICLR 2026-style compression for mlx-lm): requirements-turboquant.txt or tools/install_turboquant_mlx.sh
 mlx>=0.30.5
 mlx-lm>=0.30.0
 httpx

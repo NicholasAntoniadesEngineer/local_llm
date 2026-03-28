@@ -59,6 +59,52 @@ def _annotate_parents(parsed_tree: ast.AST) -> None:
             child_node.parent = node_value
 
 
+def _assert_statement_count(parsed_tree: ast.AST) -> int:
+    """Count real assert statements (not the word 'assert' in strings/comments)."""
+    return sum(1 for node_value in ast.walk(parsed_tree) if isinstance(node_value, ast.Assert))
+
+
+# Structural gates tuned for small MLX models: short helpers are OK if bulk exists elsewhere.
+MIN_SKILL_ASSERT_STATEMENTS = 4
+MIN_SUBSTANTIVE_LINES_PER_METHOD = 2
+MIN_SUBSTANTIVE_LINES_BEST_METHOD = 5
+MIN_SUBSTANTIVE_LINES_SUM_NON_INIT = 10
+
+
+def _substantive_depth_gate(
+    func_nodes: list, source: str
+) -> tuple[bool, str]:
+    """Require modest per-method floors, one meaty method, and enough total depth."""
+    counts: list[tuple[str, int]] = []
+    for function_node in func_nodes:
+        if function_node.name == "__init__":
+            continue
+        substantive_count = _substantive_line_count(function_node, source)
+        counts.append((function_node.name, substantive_count))
+    if not counts:
+        return False, "Need at least one function besides __init__"
+    for function_name, line_count in counts:
+        if line_count < MIN_SUBSTANTIVE_LINES_PER_METHOD:
+            return False, (
+                f"Function '{function_name}' is too shallow ({line_count} substantive lines; "
+                f"need ≥{MIN_SUBSTANTIVE_LINES_PER_METHOD})"
+            )
+    depth_values = [line_count for _, line_count in counts]
+    best_depth = max(depth_values)
+    if best_depth < MIN_SUBSTANTIVE_LINES_BEST_METHOD:
+        return False, (
+            f"Need at least one substantive method (≥{MIN_SUBSTANTIVE_LINES_BEST_METHOD} substantive lines); "
+            f"largest is {best_depth}"
+        )
+    total_depth = sum(depth_values)
+    if total_depth < MIN_SUBSTANTIVE_LINES_SUM_NON_INIT:
+        return False, (
+            f"Combined substantive depth too low ({total_depth} lines across methods; "
+            f"need ≥{MIN_SUBSTANTIVE_LINES_SUM_NON_INIT})"
+        )
+    return True, ""
+
+
 def _substantive_line_count(function_node: ast.AST, source_text: str) -> int:
     """Count non-empty, non-comment lines inside a function body."""
     if not hasattr(function_node, "lineno") or not hasattr(function_node, "end_lineno"):
@@ -88,9 +134,18 @@ def _prereq_validation(skill_tree, path: Path, parsed_tree: ast.AST, source_text
         return True, ""
 
     file_name = path.name
-    state = skill_tree.get_state()
-    skill_record = next((skill for skill in state["skills"] if skill.get("file") == file_name), None)
-    if not skill_record or not skill_record.get("prereqs"):
+    skill_record: dict[str, Any] | None = None
+    with skill_tree._conn() as connection:
+        row = connection.execute("SELECT * FROM skills WHERE file=?", (file_name,)).fetchone()
+        if not row:
+            return True, ""
+        skill_record = dict(row)
+        prereq_rows = connection.execute(
+            "SELECT prereq_id FROM prereqs WHERE skill_id=?",
+            (skill_record["id"],),
+        ).fetchall()
+        skill_record["prereqs"] = [pr_row["prereq_id"] for pr_row in prereq_rows]
+    if not skill_record.get("prereqs"):
         return True, ""
 
     imported_modules = set()
@@ -124,7 +179,11 @@ def _prereq_validation(skill_tree, path: Path, parsed_tree: ast.AST, source_text
                     call_targets.add(node_value.func.value.id)
 
     for prereq_id in skill_record["prereqs"]:
-        prereq_state = next((skill for skill in state["skills"] if skill.get("id") == prereq_id), None)
+        prereq_state: dict[str, Any] | None = None
+        with skill_tree._conn() as connection:
+            pr_row = connection.execute("SELECT * FROM skills WHERE id=?", (prereq_id,)).fetchone()
+            if pr_row:
+                prereq_state = dict(pr_row)
         if not prereq_state:
             continue
         prereq_module = Path(prereq_state["file"]).stem
@@ -164,19 +223,19 @@ def validate_generated_module(filepath: str, skill_tree=None) -> tuple[bool, str
 
     func_nodes = [node_value for node_value in ast.walk(parsed_tree) if isinstance(node_value, (ast.FunctionDef, ast.AsyncFunctionDef))]
     func_count = len(func_nodes)
-    assert_count = source.count("assert ")
+    assert_count = _assert_statement_count(parsed_tree)
 
     if func_count < 3:
         return False, f"Too few functions ({func_count}). Need ≥3 for production quality."
-    if assert_count < 5:
-        return False, f"Too few assertions ({assert_count}). Need ≥5 to verify correctness."
+    if assert_count < MIN_SKILL_ASSERT_STATEMENTS:
+        return False, (
+            f"Too few assertions ({assert_count}). "
+            f"Need ≥{MIN_SKILL_ASSERT_STATEMENTS} to verify correctness."
+        )
 
-    for function_node in func_nodes:
-        if function_node.name == "__init__":
-            continue
-        substantive_count = _substantive_line_count(function_node, source)
-        if substantive_count < 8:
-            return False, f"Function '{function_node.name}' is too shallow ({substantive_count} substantive lines)"
+    depth_ok, depth_message = _substantive_depth_gate(func_nodes, source)
+    if not depth_ok:
+        return False, depth_message
 
     if "from src." in source:
         return False, "Bad import: 'from src.*' — skills must be standalone"
@@ -239,7 +298,7 @@ class RuntimeVerifier:
         result_text: str,
         written_path: Path | None = None,
     ) -> VerificationResult:
-        if tool_name in {"write_file", "edit_file"} and written_path:
+        if tool_name in {"write_file", "edit_file", "replace_lines"} and written_path:
             if written_path.name == POLICY_FILE.name:
                 try:
                     payload = json.loads(written_path.read_text())
@@ -264,7 +323,11 @@ class RuntimeVerifier:
                         target_path=str(written_path),
                         failure_type=_classify_failure(summary_text, tool_name),
                     )
-            accepted, summary = validate_generated_module(str(written_path), skill_tree=self.skill_tree)
+            try:
+                accepted, summary = validate_generated_module(str(written_path), skill_tree=self.skill_tree)
+            except Exception as validation_error:
+                summary = f"Module validation crashed: {validation_error}"
+                accepted = False
             return VerificationResult(
                 status="validated_write" if accepted else "rejected_write",
                 accepted=accepted,

@@ -13,7 +13,7 @@ from src.config import CONFIG
 from src.context_manager import ContextBudgetGuard, EpisodicBuffer, KVCacheManager
 from src.memory import MemoryManager
 from src.logger import AgentLogger
-from src.runtime.controller import AgentController
+from src.runtime.agent_runtime import AgentRuntimeKernel
 from src.runtime.mlx_adapter import MLXGenerationAdapter
 from src.runtime.policy import PolicyEngine
 from src.runtime.runtime_support import (
@@ -27,6 +27,7 @@ from src.runtime.runtime_support import (
 from src.runtime.state_store import PersistentStateStore
 from src.runtime.tool_call_parser import extract_tool_calls_from_response
 from src.runtime.tools import TOOL_DEFINITIONS, ToolExecutor
+from src.runtime.turboquant_mlx_setup import try_make_turboquant_cache_factory
 from src.runtime.verifier import RuntimeVerifier
 from src.skill_tree import SkillTree
 
@@ -87,10 +88,20 @@ class MLXAgent:
             # OPTIMIZATION: greedy sampler (fastest - single argmax, no sampling)
             self._sampler = make_sampler(temp=0.0)
 
-            # OPTIMIZATION: prompt cache for KV reuse across turns
+            # OPTIMIZATION: prompt cache for KV reuse across turns (optional TurboQuant-MLX)
             try:
-                from mlx_lm.models.cache import make_prompt_cache
-                self._cache_factory = lambda: make_prompt_cache(self.model)
+                from mlx_lm.models.cache import make_prompt_cache as mlx_make_prompt_cache
+
+                turbo_factory = try_make_turboquant_cache_factory(self.model)
+                if turbo_factory is not None:
+                    self._cache_factory = turbo_factory
+                    print(
+                        "⚡ TurboQuant-MLX KV cache "
+                        f"(bits={os.environ.get('MLX_TURBO_BITS', '3')}, "
+                        f"fp16_edge_layers={os.environ.get('MLX_TURBO_FP16_LAYERS', '4')})"
+                    )
+                else:
+                    self._cache_factory = lambda: mlx_make_prompt_cache(self.model)
             except Exception:
                 self._cache_factory = None
             self._kv_cache_manager = KVCacheManager(self._cache_factory)
@@ -153,7 +164,7 @@ class MLXAgent:
         """
         self.goal = goal
         self.memory_manager = MemoryManager(goal)
-        self.logger = AgentLogger(goal)
+        self.logger = AgentLogger()
         self._files_written = 0
         self.state_store = PersistentStateStore(self.logger.run_id, goal, self.logger.run_dir)
         self._status_writer = PerfStatusWriter(
@@ -357,30 +368,7 @@ class MLXAgent:
             "max_iterations": CONFIG.max_iterations,
         })
 
-        controller = AgentController(
-            goal=goal,
-            config_model=self.config_model,
-            logger=self.logger,
-            memory_manager=self.memory_manager,
-            state_store=self.state_store,
-            policy_engine=self.policy_engine,
-            verifier=self.verifier,
-            tool_executor=self.tool_executor,
-            skill_tree=self.skill_tree,
-            idle_scheduler=self._idle_scheduler,
-            context_guard=self._context_guard,
-            compress_context=self._compress_context,
-            format_prompt=self._format_prompt,
-            generate_response=self._generate_response,
-            extract_tool_calls=self._extract_tool_calls,
-            build_memory_context=self._build_memory_context,
-            load_skill_instance=self._load_skill_instance,
-            pre_validate=self._pre_validate,
-            evaluate_written_file=self._evaluate_written_file,
-            perf=self._perf,
-            max_iterations=CONFIG.max_iterations,
-            resource_sampler=resource_sampler,
-        )
+        controller = AgentRuntimeKernel.from_mlx_agent(self, goal).build_controller()
         controller_summary = controller.run(resume=False)
         self._files_written = self.tool_executor.files_written
 
@@ -388,12 +376,14 @@ class MLXAgent:
             self.memory_manager.memory.save(self.memory_manager.memory_file)
 
         self.logger.run_end(controller_summary.steps_used, self._perf)
-        average_tokens_per_second = self._perf["total_tokens"] / max(0.01, self._perf["total_gen_time"])
+        wall_throughput_tok_s = self._perf["total_tokens"] / max(0.01, self._perf["total_gen_time"])
+        peak_decode = self._perf.get("peak_tok_s", 0.0)
         success_rate = self._perf["tool_success"]["success"] / max(1, self._perf["tool_success"]["total"])
         average_step_time = sum(self._perf["step_times"]) / max(1, len(self._perf["step_times"]))
         print(
-            f"\n📊 Performance: {average_tokens_per_second:.0f} tok/s avg | "
-            f"{self._perf['total_tokens']} tokens | {success_rate:.0%} tool success | "
+            f"\n📊 Performance: {wall_throughput_tok_s:.0f} tok/s wall (prefill+decode) | "
+            f"peak decode ~{peak_decode:.0f} tok/s | "
+            f"{self._perf['total_tokens']} gen tokens | {success_rate:.0%} tool success | "
             f"{average_step_time:.1f}s/step"
         )
         print("🛑 Session complete.")
@@ -411,7 +401,7 @@ class MLXAgent:
             success=controller_summary.accepted,
             metrics={
                 "tool_success_rate": round(success_rate, 4),
-                "avg_tok_s": round(average_tokens_per_second, 4),
+                "avg_tok_s": round(wall_throughput_tok_s, 4),
                 "steps_used": float(controller_summary.steps_used),
             },
         )
@@ -435,7 +425,7 @@ def main() -> None:
         sys.exit(1)
 
     args = sys.argv[1:]
-    model = os.environ.get("AGENT_MODEL", "tool_calling")
+    model = os.environ.get("AGENT_MODEL", "fast")
     if "--model" in args:
         model_index = args.index("--model")
         if model_index + 1 < len(args):

@@ -23,7 +23,12 @@ class AgentLogger:
         except Exception:
             pass
 
+    def _ensure_run_dir(self) -> None:
+        """Guarantee the run directory exists before any append/write (handles races or removed dirs)."""
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+
     def _write(self, event: dict):
+        self._ensure_run_dir()
         self._event_num += 1
         event["event_num"] = self._event_num
         event["timestamp"] = datetime.now().isoformat()
@@ -211,5 +216,6 @@ class AgentLogger:
                 "success_rate": round(tool_ok / max(1, tool_total) * 100, 0),
             },
         }
+        self._ensure_run_dir()
         with open(self.run_dir / "run_summary.json", "w") as f:
             json.dump(summary, f, indent=2)

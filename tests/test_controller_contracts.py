@@ -7,7 +7,9 @@ from src.context_manager import BudgetResult
 from src.logger import AgentLogger
 from src.runtime.controller import AgentController
 from src.runtime.state_store import PersistentStateStore
-from src.runtime.verifier import VerificationResult
+from src.runtime.task_state import TASK_PHASE_PLAN, TaskState
+from src.runtime.tools import ToolExecutionResult
+from src.runtime.verifier import RuntimeVerifier, VerificationResult
 
 
 class FakeLogger:
@@ -30,6 +32,9 @@ class FakeLogger:
         return None
 
     def phase_change(self, *args, **kwargs):
+        return None
+
+    def error(self, *args, **kwargs):
         return None
 
 
@@ -76,6 +81,15 @@ class FakePolicyEngine:
 
 
 class FakeVerifier:
+    def evaluate_tool_result(self, tool_name, result_text, written_path=None):
+        return VerificationResult(
+            status="observation",
+            accepted=False,
+            should_stop=False,
+            summary=result_text[:80],
+            target_path="",
+        )
+
     def evaluate_completion_signal(self, response_text, last_verification):
         return VerificationResult(
             status="accepted_completion",
@@ -86,8 +100,48 @@ class FakeVerifier:
         )
 
 
+class VerifierThatRaises(FakeVerifier):
+    def evaluate_tool_result(self, tool_name, result_text, written_path=None):
+        raise RuntimeError("simulated verifier fault")
+
+
+class FakeStateStoreMinimal:
+    run_id = "contract-test"
+    goal = "g"
+
+    def record_tool_attempt(self, **kwargs):
+        return None
+
+    def record_validation(self, **kwargs):
+        return None
+
+
+class FakeToolExecutorListDir:
+    def execute(self, tool_name, tool_args):
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=True,
+            output="listing ok",
+            summary="listing ok",
+            result_kind="ok",
+            details={},
+            written_path=None,
+        )
+
+
+class FakeIdleSchedulerMinimal:
+    def enqueue(self, *args, **kwargs):
+        return None
+
+    def run_pending(self, *args, **kwargs):
+        return None
+
+    def get_result(self, _key):
+        return None
+
+
 class FakeSkillTree:
-    def get_next_skill(self):
+    def peek_next_skill(self):
         return None
 
     def update_impact_from_result(self, *args, **kwargs):
@@ -131,6 +185,58 @@ class ControllerContractTests(unittest.TestCase):
                 controller.run(resume=False)
 
                 self.assertEqual(context_guard.formatter_calls, 1)
+
+    def test_tool_pipeline_survives_verifier_exception(self):
+        controller = AgentController(
+            goal="goal",
+            config_model=type("ConfigModel", (), {"name": "model", "max_tokens": 10, "context_window": 100})(),
+            logger=FakeLogger(Path(tempfile.mkdtemp()) / "r"),
+            memory_manager=None,
+            state_store=FakeStateStoreMinimal(),
+            policy_engine=FakePolicyEngine(),
+            verifier=VerifierThatRaises(),
+            tool_executor=FakeToolExecutorListDir(),
+            skill_tree=FakeSkillTree(),
+            idle_scheduler=FakeIdleSchedulerMinimal(),
+            context_guard=FakeContextGuard(),
+            compress_context=lambda messages: messages,
+            format_prompt=lambda messages: "p",
+            generate_response=lambda messages: "",
+            extract_tool_calls=lambda response: [],
+            build_memory_context=lambda: "",
+            load_skill_instance=lambda skill_name, class_name: None,
+            pre_validate=lambda path: "OK",
+            evaluate_written_file=lambda path: {},
+            perf={"tool_success": {"total": 0, "success": 0}},
+            max_iterations=1,
+            resource_sampler=lambda run_dir_value, stop_event: None,
+        )
+        task_state = TaskState(task_id="t", goal_text="goal")
+        task_state.phase = TASK_PHASE_PLAN
+        abort, verification = controller._run_single_tool_iteration(
+            step=1,
+            task_state=task_state,
+            tool_call={"name": "list_dir", "arguments": {"path": "."}},
+            loop_detector=None,
+        )
+        self.assertFalse(abort)
+        self.assertIsNone(verification)
+        self.assertEqual(task_state.phase, TASK_PHASE_PLAN)
+        self.assertTrue(any("Tool pipeline error" in r for r in task_state.failure_reasons))
+
+
+class ValidateModuleCrashTests(unittest.TestCase):
+    def test_evaluate_tool_result_survives_validate_generated_module_crash(self):
+        skill_file = Path(tempfile.mkdtemp()) / "some_skill.py"
+        skill_file.write_text("def run():\n    return 1\n", encoding="utf-8")
+        verifier = RuntimeVerifier(skill_tree=None)
+        with patch(
+            "src.runtime.verifier.validate_generated_module",
+            side_effect=RuntimeError("validator blew up"),
+        ):
+            result = verifier.evaluate_tool_result("write_file", "wrote", written_path=skill_file)
+        self.assertFalse(result.accepted)
+        self.assertIn("crashed", result.summary)
 
 
 class LoggerRunIdTests(unittest.TestCase):

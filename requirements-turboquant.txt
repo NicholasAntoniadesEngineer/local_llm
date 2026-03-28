@@ -1,0 +1,10 @@
+# TurboQuant KV for mlx-lm (Metal). Do NOT rely on plain:
+#   pip install git+https://github.com/arozanov/turboquant-mlx.git
+# on Python 3.14+ — that fails with:
+#   BackendUnavailable: Cannot import 'setuptools.backends._legacy'
+#
+# Use the patched installer (recommended):
+#   ./tools/install_turboquant_mlx.sh
+#
+# Manual: clone repo, run  python tools/patch_turboquant_pyproject.py /path/to/turboquant-mlx
+#         then  pip install -e /path/to/turboquant-mlx

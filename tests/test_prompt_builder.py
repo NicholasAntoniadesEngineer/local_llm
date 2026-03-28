@@ -73,6 +73,7 @@ class PromptBuilderTests(unittest.TestCase):
             memory_context="Memory summary block",
             retrieval_context=["Validation: old failure", "Memory: prior attempt"],
             past_failures=["failure A", "failure B", "failure C", "failure D", "failure E"],
+            static_context_block="## Frozen static (unit test)\nFixed KV-stable prefix for tests.\n",
         )
 
         self.assertEqual(len(prompt_messages), 2)
@@ -82,22 +83,29 @@ class PromptBuilderTests(unittest.TestCase):
 
         system_prompt = prompt_messages[0]["content"]
         user_prompt = prompt_messages[1]["content"]
+        self.assertIn("Frozen static (unit test)", system_prompt)
         self.assertIn("/nothink", system_prompt)
-        self.assertIn("Goal: Extract prompt builder", system_prompt)
-        self.assertIn("Current hypothesis:\n- Phase=plan; confidence=0.62; next=read_file; inspect the controller", system_prompt)
-        self.assertIn("Latest verifier result:\n- status=rejected_write", system_prompt)
-        self.assertIn("Relevant past records:\n- Validation: old failure\n- Memory: prior attempt", system_prompt)
-        self.assertIn("Historical verifier failures:\n- failure A\n- failure B\n- failure C\n- failure D", system_prompt)
-        self.assertNotIn("failure E", system_prompt)
-        self.assertIn("Memory summary block", system_prompt)
-        self.assertIn("src/file_2.py", system_prompt)
-        self.assertNotIn("src/file_1.py", system_prompt)
-        self.assertIn("failure 3", system_prompt)
-        self.assertNotIn("failure 2", system_prompt)
-        self.assertIn("Tests failed in prompt builder", system_prompt)
-        self.assertIn("result=result-5", system_prompt)
-        self.assertNotIn("result=result-0", system_prompt)
-        self.assertIn("Controller guidance:\n- Inspect the controller contract first.", user_prompt)
+        self.assertIn("## Directive", system_prompt)
+        self.assertNotIn("Goal: Extract prompt builder", system_prompt)
+        self.assertIn("Goal: Extract prompt builder", user_prompt)
+        self.assertIn(
+            "Current hypothesis:\n- Phase=plan; confidence=0.62; next=read_file; inspect the controller",
+            user_prompt,
+        )
+        self.assertIn("Latest verifier result:\n- status=rejected_write", user_prompt)
+        self.assertIn("Relevant past records:\n- Validation: old failure\n- Memory: prior attempt", user_prompt)
+        self.assertIn("## Long-term context", user_prompt)
+        self.assertIn("Historical verifier failures:\n- failure A\n- failure B\n- failure C\n- failure D", user_prompt)
+        self.assertNotIn("failure E", user_prompt)
+        self.assertIn("Memory summary block", user_prompt)
+        self.assertIn("src/file_2.py", user_prompt)
+        self.assertNotIn("src/file_1.py", user_prompt)
+        self.assertIn("failure 3", user_prompt)
+        self.assertNotIn("failure 2", user_prompt)
+        self.assertIn("Tests failed in prompt builder", user_prompt)
+        self.assertIn("result=result-5", user_prompt)
+        self.assertNotIn("result=result-0", user_prompt)
+        self.assertIn("## Controller guidance\n- Inspect the controller contract first.", user_prompt)
         self.assertNotIn("This extra message should be truncated.", user_prompt)
 
 

@@ -19,6 +19,7 @@ def resource_sampler(run_dir: Path, stop_event: threading.Event) -> None:
     except ImportError:
         return
 
+    Path(run_dir).mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as log_handle:
         while not stop_event.is_set():
             try:
@@ -112,6 +113,7 @@ class PerfStatusWriter:
 
     def _write_payload(self, payload: dict[str, Any]) -> None:
         try:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
             with open(self.run_dir / "perf.json", "w") as perf_handle:
                 json.dump(payload, perf_handle)
         except Exception:

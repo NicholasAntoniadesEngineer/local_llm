@@ -81,6 +81,7 @@ class MLXAdapterTests(unittest.TestCase):
             )
 
             self.assertEqual(response, "Hello world")
+            self.assertEqual(kv_cache_manager.prefixes, ["sys"])
             self.assertGreater(perf["total_tokens"], 0)
             self.assertEqual(len(perf["step_times"]), 1)
             self.assertTrue(status_writer.status_calls)
