@@ -1,0 +1,55 @@
+{
+  "session_id": "20260329_142236",
+  "goal": "You are building a production-quality Python module for a self-improving AI agent system.\nFollow AGENT_RULES.md at the repository root (same rules appear in the agent frozen system prompt).\n\n=== TASK ===\nModule: Confidence Scorer (Tier 2: Intelligence)\nFile: confidence_scorer.py\nImpact: 10.0/10\n\n=== WHAT THIS MODULE DOES ===\nScore agent confidence for decisions\n\n=== DETAILED SPECIFICATION ===\nClass ConfidenceScorer with knowledge/capability/progress/should_act/overall.\n\n=== WHY IT MATTERS ===\nThis module is depended on by: Smart Tool Router\nIt builds on: Performance Metrics (metrics.py), Error Recovery (error_recovery.py)\n\n=== VALIDATION GATE (your code MUST pass these or it gets deleted) ===\n1. MINIMUM 3 functions or methods (not counting __init__ or test code)\n2. MINIMUM 4 assert statements (real `assert` in Python, not only the word in strings)\n3. No 'from src.' imports \u2014 skills must be standalone\n4. Must print 'ALL TESTS PASSED' when run\n5. Real logic: at least one method with depth; small helpers OK if total depth across methods is enough\n6. Handle edge cases: empty inputs, None values, boundary conditions\n\n=== AVAILABLE PREREQ APIs ===\n# metrics \u2014 import with: from metrics import *\nfrom typing import Dict, Any\nclass AgentMetrics:\n    def __init__(self):\n    def success_rate(self) -> float:\n    def record_step(self, tool: str, success: bool, duration: float, tokens_used: int = 0) -> None:\n    def summary(self) -> Dict[str, Any]:\n    def report(self) -> str:\n# error_recovery \u2014 import with: from error_recovery import *\nclass ErrorRecovery:\n    def classify_error(error_str: str) -> str:\n    def suggest_fix(error_type: str) -> str:\n    def should_retry(error_type: str, attempt_num: int) -> bool:\n    def backoff_seconds(attempt_num: int) -> float:\n\n=== IMPORT RULES (CRITICAL) ===\n- Import prereqs: from <module_name> import <ClassName>\n- NEVER import from src.memory, src.config, or src.agent\n- Use ONLY stdlib + prereq imports listed above\n- Each prereq must be USED outside import lines (calls, types, attribute access)\u2014import-only fails verification\n- If a prereq import fails, catch ImportError and provide a standalone fallback\n\n=== TEST REQUIREMENTS ===\nLow=research, high=save, errors=abort\n- Include 'if __name__ == \"__main__\":' block\n- At least 4 distinct assert statements in the file (prefer 5+)\n- Print 'ALL TESTS PASSED' only if ALL assertions pass\n- Test edge cases (empty input, boundary values)\n\n=== EXISTING MODULES ===\nExisting skills:\n  skills/code_validator.py (144L)\n  skills/confidence_scorer.py (80L)\n  skills/error_recovery.py (73L)\n  skills/loop_detector.py (125L)\n  skills/memory_compressor.py (153L)\n  skills/metrics.py (114L)\n  skills/orchestrator.py (140L)\n  skills/result_evaluator.py (104L)\n  skills/search_cache.py (93L)\n  skills/self_evaluator.py (194L)\n  skills/smart_router.py (84L)\n  skills/strategy_learner.py (145L)\n  skills/task_planner.py (167L)\n\nWrite the complete module to confidence_scorer.py. Use read_file if you need to understand any prereq. Say DONE when tests pass.",
+  "start_time": "2026-03-29T14:22:36.046205",
+  "iterations": [
+    {
+      "step": 1,
+      "tool_used": "web_search",
+      "input_args": {
+        "query": "Python confidence scorer for AI agents with assert statements and test cases"
+      },
+      "result": "ERROR: search failed (HTTP 202)",
+      "success": false,
+      "learning": "ERROR: search failed (HTTP 202)"
+    },
+    {
+      "step": 2,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/confidence_scorer.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import Dict, Any\n    2| from metrics import AgentMetrics\n    3| from error_recovery import ErrorRecovery\n    4| \n    5| class ConfidenceScorer:\n    6|     def score_knowledge(self, discoveries_count: int, relevant_keywords: list) -> float:\n    7|         \"\"\"Score based on number of discoveries and relevant keywords\"\"\"\n    8|         if discoveries_count is None or relevant_keywords is None:\n    9|             return 0.0\n   10|         if discoveries_count == 0:\n   11|         ",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 3,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/confidence_scorer.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import Dict, Any\n    2| from metrics import AgentMetrics\n    3| from error_recovery import ErrorRecovery\n    4| \n    5| class ConfidenceScorer:\n    6|     def score_knowledge(self, discoveries_count: int, relevant_keywords: list) -> float:\n    7|         \"\"\"Score based on number of discoveries and relevant keywords\"\"\"\n    8|         if discoveries_count is None or relevant_keywords is None:\n    9|             return 0.0\n   10|         if discoveries_count == 0:\n   11|         ",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 4,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/confidence_scorer.py",
+        "start_line": 1,
+        "end_line": 20,
+        "numbered": true
+      },
+      "result": "(lines 1-20 of 80)\n    1| from typing import Dict, Any\n    2| from metrics import AgentMetrics\n    3| from error_recovery import ErrorRecovery\n    4| \n    5| class ConfidenceScorer:\n    6|     def score_knowledge(self, discoveries_count: int, relevant_keywords: list) -> float:\n    7|         \"\"\"Score based on number of discoveries and relevant keywords\"\"\"\n    8|         if discoveries_count is None or relevant_keywords is None:\n    9|             return 0.0\n   10|         if discoveries_count ==",
+      "success": true,
+      "learning": "OK"
+    }
+  ],
+  "discoveries": [],
+  "failures": [],
+  "successes": []
+}

@@ -14,6 +14,9 @@ class RepoBootstrapTests(unittest.TestCase):
         self.assertIn("Verifier numeric gates", block)
         self.assertIn("TIER 1", block)
         self.assertIn("skills/", block)
+        self.assertIn("src/ inventory", block)
+        self.assertIn("src/agent.py", block)
+        self.assertIn("src/ excerpts", block)
 
 
 if __name__ == "__main__":

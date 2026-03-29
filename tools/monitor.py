@@ -5,7 +5,7 @@ This is the COMPLETE file you asked for — no omissions.
 Pulled latest from main branch (March 22 2026).
 
 WHAT'S NEW & FIXED:
-• Realtime "Live Agent Logs" panel (last 10 events from events.jsonl — updates every 2s)
+• Realtime "Live Agent Logs" panel (last 10 events from events.jsonl — updates every 2s; generation rows include a response snippet)
 • Token Performance now works (pulls live "tok_s" / "avg_tok_s" / "peak_tok_s" from the actual events.jsonl — no more ?)
 • Context Fill % calculated from latest prompt_tokens
 • All previous fixes kept: singleton SkillTree, crash-proof, recursive search, zero hardcodes, debug header
@@ -187,7 +187,10 @@ def get_gpu_memory_info() -> dict:
         if run_dir:
             perf_data = read_perf_payload(run_dir)
             if perf_data:
-                info["status"] = perf_data.get("status", "idle")
+                info["status"] = perf_data.get(
+                    "status",
+                    "GENERATING" if perf_data.get("generating") else "idle",
+                )
                 info["context_fill_pct"] = perf_data.get("context_pct", "—")
     except Exception:
         pass
@@ -208,6 +211,24 @@ def get_model_info() -> dict:
             info["name"] = model_name
             info["context_window"] = data.get("context_window", 0)
             info["max_tokens"] = data.get("max_tokens", 0)
+            raw_eff = data.get("effective_max_tokens")
+            cfg = data.get("configured_max_tokens", data.get("max_tokens", 0))
+            if raw_eff is not None:
+                info["effective_max_tokens"] = raw_eff
+            else:
+                try:
+                    from src.runtime.mlx_adapter import _metal_safe_max_new_tokens
+
+                    pt = int(data.get("prompt_tokens") or 0)
+                    cw = int(data.get("context_window") or 0)
+                    mx = int(data.get("max_tokens") or cfg or 0)
+                    if pt > 0 and cw > 0 and mx > 0:
+                        info["effective_max_tokens"] = _metal_safe_max_new_tokens(pt, mx, cw)
+                    else:
+                        info["effective_max_tokens"] = cfg
+                except (TypeError, ValueError, ImportError):
+                    info["effective_max_tokens"] = cfg
+            info["configured_max_tokens"] = cfg
             info["model_size_gb"] = data.get("model_size_gb", "?")
             try:
                 from src.config import CONFIG
@@ -230,6 +251,8 @@ def get_model_info() -> dict:
                 "short_name": m.name.split("/")[-1],
                 "context_window": m.context_window,
                 "max_tokens": m.max_tokens,
+                "effective_max_tokens": m.max_tokens,
+                "configured_max_tokens": m.max_tokens,
                 "profile": model_key
             })
     except Exception:
@@ -256,7 +279,13 @@ def get_live_agent_logs() -> str:
                 etype = event.get("type", "unknown")
                 step = event.get("step", "?")
                 if etype == "generation":
-                    formatted.append(f"[green]GEN[/] step {step} • {event.get('tok_s', '?')} tok/s")
+                    raw_body = event.get("response_text") or event.get("response_preview") or ""
+                    one_line = " ".join(raw_body.split())[:320]
+                    if len(raw_body) > 320:
+                        one_line += "…"
+                    formatted.append(
+                        f"[green]GEN[/] step {step} • {event.get('tok_s', '?')} tok/s\n    {one_line}"
+                    )
                 elif etype == "tool_result":
                     formatted.append(f"[blue]TOOL[/] {event.get('tool', '?')} • {'✅' if event.get('success') else '❌'}")
                 elif etype == "run_start":
@@ -270,63 +299,248 @@ def get_live_agent_logs() -> str:
         return f"Log read error: {type(e).__name__}"
 
 
+def _aggregate_generation_events(run_dir: Path) -> dict[str, Any]:
+    """Parse all ``generation`` rows in events.jsonl for cumulative tokens and last-step tok/s."""
+    acc = {
+        "sum_gen_tokens": 0,
+        "sum_prompt_tokens": 0,
+        "last_generation": None,
+        "peak_tok_s": 0.0,
+    }
+    log_file = run_dir / "events.jsonl"
+    if not log_file.exists():
+        return acc
+    try:
+        log_text = log_file.read_text()
+    except OSError:
+        return acc
+    for line in log_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "generation":
+            continue
+        try:
+            acc["sum_gen_tokens"] += int(event.get("gen_tokens") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            acc["sum_prompt_tokens"] += int(event.get("prompt_tokens") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            tok_val = event.get("tok_s")
+            if tok_val is not None:
+                acc["peak_tok_s"] = max(acc["peak_tok_s"], float(tok_val))
+        except (TypeError, ValueError):
+            pass
+        acc["last_generation"] = event
+    return acc
+
+
+def _numeric_tok_per_sec(*candidates: Any) -> float | None:
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, str) and candidate.strip() in ("", "?", "—", "-"):
+            continue
+        try:
+            return float(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _empty_perf_row() -> dict[str, Any]:
+    return {
+        "tokens_per_sec": "—",
+        "peak_tok_s": "—",
+        "overall_tok_s": "—",
+        "avg_tok_s": "—",
+        "prefill_time_s": "—",
+        "prefill_tok_s": "—",
+        "decode_time_s": "—",
+        "context_fill_pct": "—",
+        "context_used": "—",
+        "gb_per_sec": "—",
+        "status": "—",
+        "step": "—",
+        "prompt_tokens": "—",
+        "gen_tokens": "—",
+        "total_gen_tokens": "—",
+        "total_prompt_tokens": "—",
+        "session_gen_s": "—",
+        "avg_step_s": "—",
+        "tool_calls": "—",
+        "tool_success_rate": "—",
+        "this_iteration_s": "—",
+        "last_iteration_s": "—",
+        "best_iteration_s": "—",
+    }
+
+
 def get_perf() -> dict:
     """Pull token performance from live perf.json first, events.jsonl as fallback."""
     run_dir = get_current_run_dir()
+    events_agg = (
+        _aggregate_generation_events(run_dir)
+        if run_dir
+        else {"sum_gen_tokens": 0, "sum_prompt_tokens": 0, "last_generation": None, "peak_tok_s": 0.0}
+    )
+    last_gen = events_agg.get("last_generation") or {}
+
+    def _fmt_num(value: Any) -> str:
+        if value is None:
+            return "—"
+        if isinstance(value, (int, float)):
+            return f"{float(value):.2f}"
+        return str(value)
+
+    def _fmt_tok1(value: Any) -> str:
+        num = _numeric_tok_per_sec(value)
+        if num is None:
+            return "—"
+        return f"{num:.1f}"
+
     if run_dir:
         data = read_perf_payload(run_dir)
         if data:
+            decode_live = _numeric_tok_per_sec(
+                data.get("decode_tok_s"),
+                data.get("gen_tok_s"),
+                last_gen.get("tok_s"),
+            )
+            status_text = str(data.get("status", ""))
+            if decode_live is not None:
+                tokens_per_sec = f"{decode_live:.1f}"
+            elif data.get("generating") and "PREFILL" in status_text.upper():
+                if events_agg["peak_tok_s"] > 0:
+                    tokens_per_sec = f"prefill (last {events_agg['peak_tok_s']:.1f})"
+                else:
+                    tokens_per_sec = "prefill"
+            else:
+                tokens_per_sec = "—"
+
+            gb_raw = data.get("bandwidth_used_gbs", 0)
+            gb_str = f"{float(gb_raw):.1f}" if isinstance(gb_raw, (int, float)) else str(gb_raw)
+            if not isinstance(gb_raw, (int, float)) and decode_live is not None:
+                model_gb = data.get("model_size_gb", 0)
+                if isinstance(model_gb, (int, float)):
+                    gb_str = f"{float(model_gb) * decode_live:.1f}"
+
+            perf_total_gen = data.get("total_gen_tokens", 0)
+            perf_total_prompt = data.get("total_prompt_tokens", 0)
+            try:
+                perf_total_gen_i = int(perf_total_gen) if perf_total_gen is not None else 0
+            except (TypeError, ValueError):
+                perf_total_gen_i = 0
+            try:
+                perf_total_prompt_i = int(perf_total_prompt) if perf_total_prompt is not None else 0
+            except (TypeError, ValueError):
+                perf_total_prompt_i = 0
+            merged_gen = max(perf_total_gen_i, events_agg["sum_gen_tokens"])
+            merged_prompt = max(perf_total_prompt_i, events_agg["sum_prompt_tokens"])
+            display_total_gen = merged_gen if merged_gen or events_agg["sum_gen_tokens"] else "—"
+            display_total_prompt = merged_prompt if merged_prompt or events_agg["sum_prompt_tokens"] else "—"
+
+            peak_from_perf = _numeric_tok_per_sec(data.get("peak_tok_s"))
+            peak_from_events = float(events_agg["peak_tok_s"])
+            if peak_from_perf is not None:
+                peak_display = max(peak_from_perf, peak_from_events)
+            elif peak_from_events > 0:
+                peak_display = peak_from_events
+            else:
+                peak_display = None
+
             return {
-                "tokens_per_sec": data.get("decode_tok_s", data.get("gen_tok_s", "?")),
-                "peak_tok_s": data.get("peak_tok_s", "?"),
+                "tokens_per_sec": tokens_per_sec,
+                "peak_tok_s": _fmt_tok1(peak_display),
+                "overall_tok_s": _fmt_tok1(data.get("gen_tok_s")),
+                "avg_tok_s": _fmt_tok1(data.get("avg_tok_s")),
+                "prefill_time_s": _fmt_num(data.get("prefill_time_s")),
+                "prefill_tok_s": _fmt_tok1(data.get("prefill_tok_s")),
+                "decode_time_s": _fmt_num(data.get("decode_time_s")),
                 "context_fill_pct": data.get("context_pct", 0),
-                "gb_per_sec": round(data.get("bandwidth_used_gbs", 0), 1),
+                "context_used": data.get("context_used", "—"),
+                "gb_per_sec": gb_str,
                 "status": data.get("status", "GENERATING" if data.get("generating") else "idle"),
                 "step": data.get("step", "?"),
                 "prompt_tokens": data.get("prompt_tokens", 0),
                 "gen_tokens": data.get("gen_tokens", 0),
+                "total_gen_tokens": display_total_gen,
+                "total_prompt_tokens": display_total_prompt,
+                "session_gen_s": _fmt_num(data.get("total_time")),
+                "avg_step_s": _fmt_num(data.get("avg_step_time")),
+                "tool_calls": data.get("tool_calls", "—"),
+                "tool_success_rate": data.get("tool_success_rate", "—"),
+                "this_iteration_s": _fmt_num(data.get("this_iteration_s")),
+                "last_iteration_s": _fmt_num(data.get("last_iteration_s")),
+                "best_iteration_s": _fmt_num(data.get("best_iteration_s")),
             }
 
     # Fallback to events.jsonl
     if not run_dir:
-        return {"tokens_per_sec": "—", "peak_tok_s": "—", "context_fill_pct": "—", "gb_per_sec": "—"}
+        return _empty_perf_row()
 
     log_file = run_dir / "events.jsonl"
     if not log_file.exists():
-        return {}
+        return _empty_perf_row()
 
     try:
         perf_payload = read_perf_payload(run_dir)
         lines = log_file.read_text().strip().split("\n")[-20:]
         latest_tok_s = 0.0
-        peak_tok_s = 0.0
+        peak_tok_s = events_agg["peak_tok_s"]
         context_fill = 0
-        context_window = perf_payload.get("context_window", 32768)
+        context_window = perf_payload.get("context_window", 40960)
+        timing_this = timing_last = timing_best = "—"
 
         for line in reversed(lines):  # newest first
             try:
                 event = json.loads(line)
                 if event.get("type") == "generation":
-                    latest_tok_s = event.get("tok_s", 0.0)
+                    latest_tok_s = float(event.get("tok_s", 0.0))
                     peak_tok_s = max(peak_tok_s, latest_tok_s)
                     prompt_t = event.get("prompt_tokens", 0)
                     if prompt_t:
                         context_fill = round((prompt_t / context_window) * 100, 1)
+                    raw_this = event.get("this_iteration_s", event.get("elapsed_s"))
+                    if raw_this is not None:
+                        timing_this = f"{float(raw_this):.2f}"
+                    if event.get("last_iteration_s") is not None:
+                        timing_last = f"{float(event['last_iteration_s']):.2f}"
+                    if event.get("best_iteration_s") is not None:
+                        timing_best = f"{float(event['best_iteration_s']):.2f}"
                     break
                 elif event.get("type") == "run_end":
-                    latest_tok_s = event.get("summary", {}).get("avg_tok_s", 0.0)
-                    peak_tok_s = event.get("summary", {}).get("peak_tok_s", 0.0)
+                    latest_tok_s = float(event.get("summary", {}).get("avg_tok_s", 0.0))
+                    peak_tok_s = max(peak_tok_s, float(event.get("summary", {}).get("peak_tok_s", 0.0)))
             except Exception:
                 continue
 
-        return {
-            "tokens_per_sec": round(latest_tok_s, 1),
-            "peak_tok_s": round(peak_tok_s, 1),
-            "context_fill_pct": context_fill,
-            "gb_per_sec": round(latest_tok_s * 7.5, 1) if latest_tok_s else "?"  # model_size_gb * decode_tok_s
-        }
+        base = _empty_perf_row()
+        sum_gen = events_agg["sum_gen_tokens"]
+        sum_prompt = events_agg["sum_prompt_tokens"]
+        base.update(
+            {
+                "tokens_per_sec": round(latest_tok_s, 1) if latest_tok_s else "—",
+                "peak_tok_s": round(peak_tok_s, 1) if peak_tok_s else "—",
+                "context_fill_pct": context_fill,
+                "gb_per_sec": round(latest_tok_s * 7.5, 1) if latest_tok_s else "—",
+                "this_iteration_s": timing_this,
+                "last_iteration_s": timing_last,
+                "best_iteration_s": timing_best,
+                "total_gen_tokens": sum_gen if sum_gen else "—",
+                "total_prompt_tokens": sum_prompt if sum_prompt else "—",
+            }
+        )
+        return base
     except Exception:
-        return {}
+        return _empty_perf_row()
 
 
 def get_cycle_stats() -> dict:
@@ -586,7 +800,24 @@ def build_dashboard() -> Layout:
     model_table.add_row("Profile", model.get("profile", "—"))
     model_table.add_row("Model Size", f"{model.get('model_size_gb', '?')} GB")
     model_table.add_row("Context", f"{model.get('context_window', 0):,} tokens")
-    model_table.add_row("Max Tokens", f"{model.get('max_tokens', 0):,} tokens")
+    eff_max = model.get("effective_max_tokens")
+    if eff_max is None:
+        eff_max = model.get("max_tokens", 0)
+    cfg_max = model.get("configured_max_tokens")
+    if cfg_max is None:
+        cfg_max = model.get("max_tokens", 0)
+    try:
+        eff_i = int(eff_max)
+        cfg_i = int(cfg_max)
+    except (TypeError, ValueError):
+        eff_i = cfg_i = 0
+    if eff_i > 0 and cfg_i > 0 and eff_i != cfg_i:
+        model_table.add_row(
+            "Max new tok",
+            f"{eff_i:,} / {cfg_i:,} [dim](Metal cap)[/]",
+        )
+    else:
+        model_table.add_row("Max new tok", f"{cfg_i:,} tokens")
     model_table.add_row("Bench Slice", str(controller_metrics.get("benchmark_name", "—"))[:36])
 
     # Hardware
@@ -599,8 +830,11 @@ def build_dashboard() -> Layout:
     hw_table.add_row("Used", f"{mem['used_gb']:.1f} GB ({mem['percent']}%)")
     hw_table.add_row("Free", f"{mem['free_gb']:.1f} GB")
     hw_table.add_row("GPU Device", str(gpu_mem.get("device", "—"))[:24])
-    hw_table.add_row("GPU Shared", f"{gpu_mem.get('shared_total_gb', '—')} GB")
-    hw_table.add_row("GPU Free", f"{gpu_mem.get('shared_free_gb', '—')} GB")
+    hw_table.add_row(
+        "GPU memory",
+        f"{gpu_mem.get('shared_total_gb', '—')} GB total · "
+        f"{gpu_mem.get('shared_free_gb', '—')} GB free",
+    )
 
     # GPU utilization from resources.jsonl (last 20 samples)
     gpu_busy_pct = "—"
@@ -646,46 +880,71 @@ def build_dashboard() -> Layout:
     brain_table.add_row("Proposals Ready", str(brain['proposals_ready']))
     brain_table.add_row("Evolution", "[bold green]ENABLED[/]" if brain['evolution_enabled'] else "[dim]v2[/]")
 
-    # Token Performance (NOW FIXED)
-    perf_table = Table(
-        title="Performance", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
-    )
-    perf_table.add_column("", style="cyan", width=14, no_wrap=True)
-    perf_table.add_column("", style="green", max_width=20)
-    status = perf.get('status', '—')
-    perf_table.add_row("Status", f"[bold yellow]{status}[/]" if "PREFILL" in str(status) else f"{status}")
-    perf_table.add_row("Step", f"{perf.get('step', '—')}")
-    perf_table.add_row("Decode tok/s", f"{perf.get('tokens_per_sec', '?')}")
-    perf_table.add_row("Peak tok/s", f"{perf.get('peak_tok_s', '?')}")
-    perf_table.add_row("Prompt tokens", f"{perf.get('prompt_tokens', '—')}")
-    perf_table.add_row("Gen tokens", f"{perf.get('gen_tokens', '—')}")
-    perf_table.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
-    perf_table.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
-    stall_note = "YES" if controller_metrics.get("generation_stalled") else "no"
-    perf_table.add_row("Gen stalled", stall_note)
-    perf_table.add_row("Validations", str(controller_metrics.get("validation_pass_rate", "—")))
-    perf_table.add_row("Checkpoint", str(controller_metrics.get("checkpoint_status", "—")))
-    perf_table.add_row("Compress", str(controller_metrics.get("compression_rate", "—")))
-    perf_table.add_row("Task Phase", str(controller_metrics.get("task_phase", "—")))
-    perf_table.add_row("Task Step", str(controller_metrics.get("task_step", "—")))
-    perf_table.add_row("Bench tok/s", str(controller_metrics.get("benchmark_avg_tok_s", "—")))
+    # Performance — three columns (shortens vertical height vs one tall table)
+    _perf_col_style = dict(expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False)
+    perf_speed = Table(title="Performance · step & speed", **_perf_col_style)
+    perf_speed.add_column("", style="cyan", width=12, no_wrap=True)
+    perf_speed.add_column("", style="green", max_width=18)
+    status = perf.get("status", "—")
+    perf_speed.add_row("Status", f"[bold yellow]{status}[/]" if "PREFILL" in str(status) else f"{status}")
+    perf_speed.add_row("Step", f"{perf.get('step', '—')}")
+    perf_speed.add_row("This iter s", f"{perf.get('this_iteration_s', '—')}")
+    perf_speed.add_row("Last iter s", f"{perf.get('last_iteration_s', '—')}")
+    perf_speed.add_row("Best iter s", f"{perf.get('best_iteration_s', '—')}")
+    perf_speed.add_row("Decode tok/s", f"{perf.get('tokens_per_sec', '?')}")
+    perf_speed.add_row("Peak tok/s", f"{perf.get('peak_tok_s', '?')}")
+    perf_speed.add_row("Overall tok/s", f"{perf.get('overall_tok_s', '?')}")
+    perf_speed.add_row("Avg tok/s (sess)", f"{perf.get('avg_tok_s', '?')}")
+    perf_speed.add_row("Prefill s", f"{perf.get('prefill_time_s', '—')}")
+    perf_speed.add_row("Decode wall s", f"{perf.get('decode_time_s', '—')}")
 
-    # Self-Improvement Cycles
-    cycle_table = Table(
-        title="Cycles", expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False
-    )
-    cycle_table.add_column("", style="cyan", width=10, no_wrap=True)
-    cycle_table.add_column("", style="green", max_width=10)
-    cycle_table.add_row("Total Cycles", str(stats["cycles"]))
-    cycle_table.add_row("PASSED", f"[green]{stats['passed']}[/]")
-    cycle_table.add_row("FAILED", f"[red]{stats['failed']}[/]")
-    cycle_table.add_row("IDLE", str(stats.get("idle", 0)))
-    cycle_table.add_row("DELETED", str(stats["deleted"]))
-    cycle_table.add_row("Non-accept", str(controller_metrics.get("non_accepted_runs", "—")))
-    cycle_table.add_row("Reward", str(controller_metrics.get("reward_total", "—")))
-    cycle_table.add_row("Loop Rate", str(controller_metrics.get("loop_detection_rate", "—")))
-    cycle_table.add_row("Last Failure", str(controller_metrics.get("last_failure_type", "—"))[:24])
-    cycle_table.add_row("Bench secs", str(controller_metrics.get("benchmark_elapsed_s", "—")))
+    perf_tokens = Table(title="Performance · tokens & context", **_perf_col_style)
+    perf_tokens.add_column("", style="cyan", width=12, no_wrap=True)
+    perf_tokens.add_column("", style="green", max_width=18)
+    perf_tokens.add_row("Prefill tok/s", f"{perf.get('prefill_tok_s', '?')}")
+    perf_tokens.add_row("Prompt tokens", f"{perf.get('prompt_tokens', '—')}")
+    perf_tokens.add_row("Gen tokens", f"{perf.get('gen_tokens', '—')}")
+    perf_tokens.add_row("Total gen (run)", f"{perf.get('total_gen_tokens', '—')}")
+    perf_tokens.add_row("Total prompt (run)", f"{perf.get('total_prompt_tokens', '—')}")
+    perf_tokens.add_row("Context used", f"{perf.get('context_used', '—')}")
+    perf_tokens.add_row("Context Fill", f"{perf.get('context_fill_pct', 0)}%")
+    perf_tokens.add_row("Est. GB/s", f"{perf.get('gb_per_sec', '?')}")
+    perf_tokens.add_row("Session gen s", f"{perf.get('session_gen_s', '—')}")
+    perf_tokens.add_row("Avg step s", f"{perf.get('avg_step_s', '—')}")
+
+    perf_task = Table(title="Performance · tools & task", **_perf_col_style)
+    perf_task.add_column("", style="cyan", width=12, no_wrap=True)
+    perf_task.add_column("", style="green", max_width=18)
+    stall_note = "YES" if controller_metrics.get("generation_stalled") else "no"
+    perf_task.add_row("Tool calls", f"{perf.get('tool_calls', '—')}")
+    perf_task.add_row("Tool OK %", f"{perf.get('tool_success_rate', '—')}")
+    perf_task.add_row("Gen stalled", stall_note)
+    perf_task.add_row("Validations", str(controller_metrics.get("validation_pass_rate", "—")))
+    perf_task.add_row("Checkpoint", str(controller_metrics.get("checkpoint_status", "—")))
+    perf_task.add_row("Compress", str(controller_metrics.get("compression_rate", "—")))
+    perf_task.add_row("Task Phase", str(controller_metrics.get("task_phase", "—")))
+    perf_task.add_row("Task Step", str(controller_metrics.get("task_step", "—")))
+    perf_task.add_row("Bench tok/s", str(controller_metrics.get("benchmark_avg_tok_s", "—")))
+
+    # Self-Improvement Cycles — two columns (shorter than one tall table)
+    _cycle_style = dict(expand=False, box=box.ROUNDED, padding=(0, 1), show_header=False)
+    cycle_counts = Table(title="Cycles · outcomes", **_cycle_style)
+    cycle_counts.add_column("", style="cyan", width=10, no_wrap=True)
+    cycle_counts.add_column("", style="green", max_width=12)
+    cycle_counts.add_row("Total", str(stats["cycles"]))
+    cycle_counts.add_row("PASSED", f"[green]{stats['passed']}[/]")
+    cycle_counts.add_row("FAILED", f"[red]{stats['failed']}[/]")
+    cycle_counts.add_row("IDLE", str(stats.get("idle", 0)))
+    cycle_counts.add_row("DELETED", str(stats["deleted"]))
+
+    cycle_metrics = Table(title="Cycles · metrics", **_cycle_style)
+    cycle_metrics.add_column("", style="cyan", width=10, no_wrap=True)
+    cycle_metrics.add_column("", style="green", max_width=12)
+    cycle_metrics.add_row("Non-accept", str(controller_metrics.get("non_accepted_runs", "—")))
+    cycle_metrics.add_row("Reward", str(controller_metrics.get("reward_total", "—")))
+    cycle_metrics.add_row("Loop Rate", str(controller_metrics.get("loop_detection_rate", "—")))
+    cycle_metrics.add_row("Last Failure", str(controller_metrics.get("last_failure_type", "—"))[:22])
+    cycle_metrics.add_row("Bench secs", str(controller_metrics.get("benchmark_elapsed_s", "—")))
 
     # Live Agent Logs (structured events)
     logs_panel = Panel(
@@ -711,29 +970,52 @@ def build_dashboard() -> Layout:
         expand=True,
     )
 
-    for t in [model_table, hw_table, agent_table, perf_table, brain_table, cycle_table]:
-        t.expand = True
+    # expand=False: avoids blank lines inside Layout regions (was ~4 lines between perf ↔ SkillTree).
+    for t in [
+        model_table,
+        hw_table,
+        agent_table,
+        perf_speed,
+        perf_tokens,
+        perf_task,
+        brain_table,
+        cycle_counts,
+        cycle_metrics,
+    ]:
+        t.expand = False
 
-    # Row 1: Model | Hardware | Agent | Performance (4 columns)
-    row1 = Layout(name="row1", size=10)
-    row1.split_row(
+    # Row A: Model | Hardware | Agent (3 columns)
+    row_top = Layout(name="row_top")
+    row_top.split_row(
         Layout(model_table, ratio=1),
         Layout(hw_table, ratio=1),
         Layout(agent_table, ratio=1),
-        Layout(perf_table, ratio=1),
     )
 
-    # Row 2: SkillTree | Cycles (2 columns, full width)
-    row2 = Layout(name="row2", size=9)
-    row2.split_row(Layout(brain_table, ratio=2), Layout(cycle_table, ratio=1))
+    # Row B: Performance as 3 columns under Model / Hardware / Agent
+    row_perf = Layout(name="row_perf")
+    row_perf.split_row(
+        Layout(perf_speed, ratio=1),
+        Layout(perf_tokens, ratio=1),
+        Layout(perf_task, ratio=1),
+    )
 
-    # Row 3: Agent Logs | Terminal Output (full width)
-    row3 = Layout(name="row3", ratio=1)
+    # Row C: SkillTree | Cycles (two columns)
+    row_cycles = Layout(name="row_cycles")
+    row_cycles.split_row(Layout(cycle_counts, ratio=1), Layout(cycle_metrics, ratio=1))
+    row2 = Layout(name="row2")
+    row2.split_row(Layout(brain_table, ratio=2), Layout(row_cycles, ratio=2))
+
+    # Row D: Live logs | Improve session
+    row3 = Layout(name="row3")
     row3.split_row(Layout(logs_panel, ratio=1), Layout(raw_panel, ratio=1))
 
     layout.split(
         Layout(header, name="header", size=3),
-        row1, row2, row3,
+        Layout(row_top, ratio=2, minimum_size=12),
+        Layout(row_perf, ratio=3, minimum_size=8),
+        Layout(row2, ratio=2, minimum_size=10),
+        Layout(row3, ratio=2, minimum_size=8),
     )
 
     return layout

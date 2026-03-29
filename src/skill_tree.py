@@ -98,6 +98,7 @@ class SkillTree:
         self._load_graph()
         self._scan_completed()
         # Embeddings computed lazily on first similarity request
+        self._tree_proposals_scan_token: tuple[int, int] | None = None
 
     # ── Database ──────────────────────────────────────────────────────────
 
@@ -521,6 +522,18 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
         """Parse text-file proposals (v2 compat)."""
         f = SKILLS_DIR / "tree_proposals.txt"
         if not f.exists():
+            self._tree_proposals_scan_token = None
+            return []
+        try:
+            proposal_file_stat = f.stat()
+            scan_token = (proposal_file_stat.st_mtime_ns, proposal_file_stat.st_size)
+        except OSError:
+            scan_token = None
+        if (
+            scan_token is not None
+            and self._tree_proposals_scan_token is not None
+            and self._tree_proposals_scan_token == scan_token
+        ):
             return []
         added = []
         for line in f.read_text().split("\n"):
@@ -545,6 +558,8 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
                     added.append(sid)
                 except ValueError:
                     pass
+        if scan_token is not None:
+            self._tree_proposals_scan_token = scan_token
         if added:
             self._load_graph()
         return added
@@ -591,7 +606,7 @@ Output ONLY a JSON array. No explanation."""
 
             messages = [{"role": "user", "content": prompt_text}]
             formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            response = generate(model, tokenizer, prompt=formatted, max_tokens=2048, sampler=sampler)
+            response = generate(model, tokenizer, prompt=formatted, max_tokens=4096, sampler=sampler)
 
             response = strip_thinking_tags(response)
 
@@ -670,7 +685,7 @@ Output ONLY the Python code. No explanation."""
 
             messages = [{"role": "user", "content": prompt_text}]
             formatted = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            response = generate(model, tokenizer, prompt=formatted, max_tokens=4096, sampler=sampler)
+            response = generate(model, tokenizer, prompt=formatted, max_tokens=8192, sampler=sampler)
             response = strip_thinking_tags(response)
 
             # Extract code from markdown blocks or raw

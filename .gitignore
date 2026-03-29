@@ -1,3 +1,6 @@
+# Local forks (tools/install_mlx_fork_metal.sh)
+vendor/
+
 # Environment
 mlx_agent_env/
 .env

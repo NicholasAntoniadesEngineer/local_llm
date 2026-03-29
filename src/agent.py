@@ -164,6 +164,10 @@ class MLXAgent:
         """
         self.goal = goal
         self.memory_manager = MemoryManager(goal)
+        try:
+            self.logger.close()
+        except Exception:
+            pass
         self.logger = AgentLogger()
         self._files_written = 0
         self.state_store = PersistentStateStore(self.logger.run_id, goal, self.logger.run_dir)
@@ -416,6 +420,11 @@ class MLXAgent:
             })
         except Exception:
             pass
+        finally:
+            try:
+                self.logger.close()
+            except Exception:
+                pass
 
 
 def main() -> None:

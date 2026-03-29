@@ -1,0 +1,20 @@
+{
+  "session_id": "20260329_160834",
+  "goal": "You are building a production-quality Python module for a self-improving AI agent system.\nFollow AGENT_RULES.md at the repository root (same rules appear in the agent frozen system prompt).\n\n=== TASK ===\nModule: Result Evaluator (Tier 2: Intelligence)\nFile: result_evaluator.py\nImpact: 8.2/10\n\n=== WHAT THIS MODULE DOES ===\nEvaluate quality of tool results\n\n=== DETAILED SPECIFICATION ===\nClass ResultEvaluator with score_search/score_code/is_duplicate/summarize.\n\n=== WHY IT MATTERS ===\nThis module is depended on by: Self Evaluator\nIt builds on: Search Result Cache (search_cache.py)\n\n=== VALIDATION GATE (your code MUST pass these or it gets deleted) ===\n1. MINIMUM 3 functions or methods (not counting __init__ or test code)\n2. MINIMUM 4 assert statements (real `assert` in Python, not only the word in strings)\n3. No 'from src.' imports \u2014 skills must be standalone\n4. Must print 'ALL TESTS PASSED' when run\n5. Real logic: at least one method with depth; small helpers OK if total depth across methods is enough\n6. Handle edge cases: empty inputs, None values, boundary conditions\n\n=== AVAILABLE PREREQ APIs ===\n# search_cache \u2014 import with: from search_cache import *\nimport time\nfrom typing import Optional, Dict\nclass SearchCache:\n    def __init__(self):\n    def get(self, key: str) -> Optional[str]:\n    def set(self, key: str, value: str, ttl_seconds: int = 300):\n    def cleanup(self):\n    def stats(self):\ndef test_search_cache():\n\n=== IMPORT RULES (CRITICAL) ===\n- Import prereqs: from <module_name> import <ClassName>\n- NEVER import from src.memory, src.config, or src.agent\n- Use ONLY stdlib + prereq imports listed above\n- Each prereq must be USED outside import lines (calls, types, attribute access)\u2014import-only fails verification\n- If a prereq import fails, catch ImportError and provide a standalone fallback\n\n=== TEST REQUIREMENTS ===\nRelevant=high, junk=low, duplicate detection\n- Include 'if __name__ == \"__main__\":' block\n- At least 4 distinct assert statements in the file (prefer 5+)\n- Print 'ALL TESTS PASSED' only if ALL assertions pass\n- Test edge cases (empty input, boundary values)\n\n=== EXISTING MODULES ===\nExisting skills:\n  skills/code_validator.py (144L)\n  skills/confidence_scorer.py (80L)\n  skills/error_recovery.py (73L)\n  skills/loop_detector.py (125L)\n  skills/memory_compressor.py (153L)\n  skills/metrics.py (114L)\n  skills/orchestrator.py (140L)\n  skills/result_evaluator.py (104L)\n  skills/search_cache.py (93L)\n  skills/self_evaluator.py (194L)\n  skills/smart_router.py (84L)\n  skills/strategy_learner.py (145L)\n  skills/task_planner.py (167L)\n\nWrite the complete module to result_evaluator.py. Use read_file if you need to understand any prereq. Say DONE when tests pass.",
+  "start_time": "2026-03-29T16:08:34.678037",
+  "iterations": [
+    {
+      "step": 1,
+      "tool_used": "web_search",
+      "input_args": {
+        "query": "Python result evaluator for AI agents with search and code quality scoring"
+      },
+      "result": "ERROR: search failed (HTTP 202)",
+      "success": false,
+      "learning": "ERROR: search failed (HTTP 202)"
+    }
+  ],
+  "discoveries": [],
+  "failures": [],
+  "successes": []
+}

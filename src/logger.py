@@ -1,12 +1,29 @@
-"""Structured logging for every agent decision, tool call, and result."""
+"""Structured logging for every agent decision, tool call, and result.
+
+``generation`` events include ``response_text`` (full raw model output for that step).
+Optional ``AGENT_LOG_RESPONSE_MAX_CHARS`` (positive int) truncates stored text and appends a marker.
+"""
 
 import json
+import os
 import time
 from pathlib import Path
 from datetime import datetime
+from typing import TextIO
 
 
 from src.paths import RUNS_DIR, get_run_dir
+
+
+def _agent_log_response_char_limit() -> int | None:
+    raw = os.environ.get("AGENT_LOG_RESPONSE_MAX_CHARS", "").strip()
+    if not raw:
+        return None
+    try:
+        parsed_limit = int(raw)
+    except ValueError:
+        return None
+    return parsed_limit if parsed_limit > 0 else None
 
 
 class AgentLogger:
@@ -18,6 +35,7 @@ class AgentLogger:
         self.log_file = self.run_dir / "events.jsonl"
         self.start_time = time.time()
         self._event_num = 0
+        self._events_jsonl_append_handle: TextIO | None = None
         try:
             (self.run_dir / "run_id.txt").write_text(self.run_id)
         except Exception:
@@ -34,8 +52,20 @@ class AgentLogger:
         event["timestamp"] = datetime.now().isoformat()
         event["elapsed_s"] = round(time.time() - self.start_time, 2)
         event["run_id"] = self.run_id
-        with open(self.log_file, "a") as f:
-            f.write(json.dumps(event, default=str) + "\n")
+        if self._events_jsonl_append_handle is None:
+            self._events_jsonl_append_handle = open(self.log_file, "a", encoding="utf-8")
+        self._events_jsonl_append_handle.write(json.dumps(event, default=str) + "\n")
+        self._events_jsonl_append_handle.flush()
+
+    def close(self) -> None:
+        """Flush and close the events.jsonl append handle (idempotent)."""
+        if self._events_jsonl_append_handle is not None:
+            try:
+                self._events_jsonl_append_handle.flush()
+                self._events_jsonl_append_handle.close()
+            except OSError:
+                pass
+            self._events_jsonl_append_handle = None
 
     def run_start(self, goal: str, model: str, config: dict):
         import subprocess, platform
@@ -81,17 +111,40 @@ class AgentLogger:
             "messages_in_context": messages_count,
         })
 
-    def generation(self, step: int, prompt_tokens: int, gen_tokens: int,
-                   tok_s: float, elapsed: float, response_preview: str):
-        self._write({
-            "type": "generation",
-            "step": step,
-            "prompt_tokens": prompt_tokens,
-            "gen_tokens": gen_tokens,
-            "tok_s": round(tok_s, 1),
-            "elapsed_s": round(elapsed, 2),
-            "response_preview": response_preview[:300],
-        })
+    def generation(
+        self,
+        step: int,
+        prompt_tokens: int,
+        gen_tokens: int,
+        tok_s: float,
+        elapsed: float,
+        response_text: str,
+        *,
+        last_iteration_s: float | None = None,
+        best_iteration_s: float | None = None,
+    ):
+        char_limit = _agent_log_response_char_limit()
+        if char_limit is not None and len(response_text) > char_limit:
+            stored_response = (
+                response_text[:char_limit] + "\n...[truncated: AGENT_LOG_RESPONSE_MAX_CHARS]"
+            )
+        else:
+            stored_response = response_text
+        self._write(
+            {
+                "type": "generation",
+                "step": step,
+                "prompt_tokens": prompt_tokens,
+                "gen_tokens": gen_tokens,
+                "tok_s": round(tok_s, 1),
+                "elapsed_s": round(elapsed, 2),
+                "this_iteration_s": round(elapsed, 2),
+                "last_iteration_s": last_iteration_s,
+                "best_iteration_s": best_iteration_s,
+                "response_preview": response_text[:300],
+                "response_text": stored_response,
+            }
+        )
 
     def tool_call(self, step: int, tool: str, args: dict):
         self._write({

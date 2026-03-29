@@ -1,8 +1,17 @@
 """Central environment defaults for the self-improvement loop (`tools/improve.py`).
 
 Call `apply_self_improve_runtime_environment()` before constructing `MLXAgent` so long
-multi-step runs get stable MLX macOS flags and TurboQuant-MLX defaults from `CONFIG`.
-Explicit environment variables always win (`setdefault` only).
+multi-step runs get stable MLX macOS flags. TurboQuant-MLX is opt-in via `CONFIG` / env
+(higher decode tok/s with default mlx-lm KV). Explicit environment variables always win.
+
+`IMPROVE_LOOP_SLEEP_SEC` (default ``3``): seconds between `--loop` cycles; set ``0`` to
+disable the pause.
+
+`AGENT_LOG_RESPONSE_MAX_CHARS`: optional cap on ``response_text`` stored per ``generation`` line
+in ``events.jsonl`` (omit for full text).
+
+``MLX_METAL_DECODE_CAP``: optional ceiling (tokens) on per-step decode length; tiered caps also apply
+for long prompts to avoid Metal OOM (see ``_metal_safe_max_new_tokens`` in ``mlx_adapter``).
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ def _turbo_kv_env_enabled() -> bool:
 def apply_self_improve_runtime_environment() -> None:
     """Set process defaults for improve-loop runs (idempotent; respects pre-set env)."""
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    os.environ.setdefault("AGENT_MODEL", "fast")
 
     if CONFIG.self_improve_setdefault_turbo_kv:
         os.environ.setdefault("MLX_USE_TURBO_KV", "1")
@@ -42,6 +52,7 @@ def print_self_improve_runtime_banner() -> None:
     lines = [
         "Self-improve runtime:",
         f"  KMP_DUPLICATE_LIB_OK={os.environ.get('KMP_DUPLICATE_LIB_OK', '')}",
+        f"  AGENT_MODEL={os.environ.get('AGENT_MODEL', 'fast')} (tool_calling / quality = 32B, slower)",
     ]
     if _turbo_kv_env_enabled():
         try:

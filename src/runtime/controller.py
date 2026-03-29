@@ -103,8 +103,8 @@ class AgentController:
         if self.skill_tree is not None:
             try:
                 full_tree_text = self.skill_tree._tree_text()
-                tree_text_value = full_tree_text[:14000] + (
-                    "\n...(truncated skill tree)\n" if len(full_tree_text) > 14000 else ""
+                tree_text_value = full_tree_text[:18000] + (
+                    "\n...(truncated skill tree)\n" if len(full_tree_text) > 18000 else ""
                 )
             except Exception:
                 tree_text_value = ""

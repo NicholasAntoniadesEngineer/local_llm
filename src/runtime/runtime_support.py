@@ -90,9 +90,22 @@ class PerfStatusWriter:
         self.max_tokens = max_tokens
         self.model_size_gb = model_size_gb
 
-    def write_status(self, status: str, generating: bool, perf: dict[str, Any]) -> None:
-        """Write lightweight live status for the monitor."""
-        payload = {
+    def _read_previous_perf_payload(self) -> dict[str, Any]:
+        perf_path = self.run_dir / "perf.json"
+        if not perf_path.exists():
+            return {}
+        try:
+            return json.loads(perf_path.read_text())
+        except Exception:
+            return {}
+
+    def write_status(self, status: str, generating: bool, perf: dict[str, Any], **live_metrics: Any) -> None:
+        """Write lightweight live status for the monitor.
+
+        Pass ``prompt_tokens=`` / ``gen_tokens=`` / ``decode_tok_s=`` during prefill so perf.json
+        is not overwritten without per-step fields (monitor otherwise shows 0).
+        """
+        payload: dict[str, Any] = {
             "status": status,
             "generating": generating,
             "model": self.model_name.split("/")[-1],
@@ -105,6 +118,72 @@ class PerfStatusWriter:
             "peak_tok_s": perf.get("peak_tok_s", 0),
             "timestamp": time.time(),
         }
+        previous_payload = self._read_previous_perf_payload()
+        carry_keys = (
+            "prompt_tokens",
+            "gen_tokens",
+            "decode_tok_s",
+            "gen_tok_s",
+            "context_pct",
+            "this_iteration_s",
+            "last_iteration_s",
+            "best_iteration_s",
+            "prefill_time_s",
+            "prefill_tok_s",
+            "decode_time_s",
+            "avg_tok_s",
+            "total_gen_tokens",
+            "total_prompt_tokens",
+            "total_time",
+            "avg_step_time",
+            "tool_calls",
+            "tool_success",
+            "tool_success_rate",
+            "context_used",
+            "elapsed",
+            "bandwidth_used_gbs",
+            "effective_max_tokens",
+            "configured_max_tokens",
+        )
+        for key_name in carry_keys:
+            if key_name in live_metrics:
+                payload[key_name] = live_metrics[key_name]
+            elif key_name in previous_payload:
+                payload[key_name] = previous_payload[key_name]
+        if "prompt_tokens" in live_metrics and self.context_window:
+            try:
+                payload["context_pct"] = round(
+                    (int(live_metrics["prompt_tokens"]) / self.context_window) * 100,
+                    1,
+                )
+            except (TypeError, ValueError):
+                pass
+        elif "context_pct" in live_metrics:
+            payload["context_pct"] = live_metrics["context_pct"]
+        elif "prompt_tokens" in payload and self.context_window and "context_pct" not in payload:
+            try:
+                payload["context_pct"] = round(
+                    (int(payload["prompt_tokens"]) / self.context_window) * 100,
+                    1,
+                )
+            except (TypeError, ValueError):
+                pass
+        for key_name, value in live_metrics.items():
+            if key_name not in payload:
+                payload[key_name] = value
+        try:
+            prompt_tok = payload.get("prompt_tokens")
+            if prompt_tok is not None:
+                pt = int(prompt_tok)
+                if pt > 0:
+                    from src.runtime.mlx_adapter import _metal_safe_max_new_tokens
+
+                    payload["effective_max_tokens"] = _metal_safe_max_new_tokens(
+                        pt, self.max_tokens, self.context_window
+                    )
+                    payload["configured_max_tokens"] = self.max_tokens
+        except (TypeError, ValueError, ImportError):
+            pass
         self._write_payload(payload)
 
     def write_generation_stats(self, payload: dict[str, Any]) -> None:

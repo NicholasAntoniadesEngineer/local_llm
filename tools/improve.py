@@ -68,7 +68,9 @@ def main() -> None:
                     f"({success_rate:.0%} on completed cycles); idle cycles not counted"
                 )
                 current_cycle += 1
-                time.sleep(3)
+                sleep_s = float(os.environ.get("IMPROVE_LOOP_SLEEP_SEC", "3"))
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
             except KeyboardInterrupt:
                 print(f"\n\nFinal session: {passed_cycles} passed, {failed_cycles} failed")
                 break

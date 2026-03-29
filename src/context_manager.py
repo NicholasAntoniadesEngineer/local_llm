@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Callable
+
+from src.runtime.mlx_adapter import _metal_safe_prompt_token_cap
 
 
 Message = dict[str, str]
@@ -111,12 +114,66 @@ class ContextBudgetGuard:
         except Exception:
             return sum(len(message.get("content", "")) for message in messages) // 4
 
+    def _shrink_messages_to_hard_limit(
+        self,
+        messages: list[Message],
+        formatter: PromptFormatter,
+        hard_limit: int,
+    ) -> tuple[list[Message], int]:
+        """Ensure formatted prompt fits hard_limit by truncating long message bodies (system first)."""
+        working_messages = copy.deepcopy(messages)
+        marker = "\n\n...[truncated for token budget]\n\n"
+        min_tail_chars = 400
+
+        def count_tokens() -> int:
+            return self.prompt_tokens(working_messages, formatter)
+
+        if count_tokens() <= hard_limit:
+            return working_messages, count_tokens()
+
+        for message_index in range(len(working_messages)):
+            content_text = working_messages[message_index].get("content", "")
+            if not isinstance(content_text, str) or len(content_text) <= min_tail_chars + len(marker):
+                continue
+
+            def trial_content_for_prefix_len(prefix_len: int) -> str:
+                if prefix_len >= len(content_text):
+                    return content_text
+                head = content_text[:prefix_len]
+                return head + marker + content_text[-min_tail_chars:]
+
+            low_len = 0
+            high_len = len(content_text)
+            best_prefix = 0
+            while low_len <= high_len:
+                mid_len = (low_len + high_len) // 2
+                working_messages[message_index]["content"] = trial_content_for_prefix_len(mid_len)
+                if count_tokens() <= hard_limit:
+                    best_prefix = mid_len
+                    low_len = mid_len + 1
+                else:
+                    high_len = mid_len - 1
+
+            working_messages[message_index]["content"] = trial_content_for_prefix_len(best_prefix)
+            if count_tokens() <= hard_limit:
+                return working_messages, count_tokens()
+
+        if working_messages:
+            working_messages[0]["content"] = (
+                "(System prompt truncated to emergency stub; shrink frozen static or raise context_window.)\n"
+                + str(working_messages[0].get("content", ""))[:800]
+            )
+        return working_messages, count_tokens()
+
     def enforce_budget(self, messages: list[Message], formatter: PromptFormatter) -> BudgetResult:
         """Compress the conversation until it fits a safe prompt budget."""
         working_messages = list(messages)
         prompt_token_count = self.prompt_tokens(working_messages, formatter)
         soft_limit = int(self.context_window * 0.75)
         hard_limit = self.context_window - self.max_tokens - 512
+        metal_prompt_cap = _metal_safe_prompt_token_cap()
+        if metal_prompt_cap is not None:
+            hard_limit = min(hard_limit, metal_prompt_cap)
 
         if prompt_token_count > soft_limit:
             working_messages = self.episodic_buffer.compress_messages(working_messages)
@@ -124,13 +181,21 @@ class ContextBudgetGuard:
             if prompt_token_count <= hard_limit:
                 return BudgetResult(working_messages, prompt_token_count, "episodic_flush")
 
+        action = "none"
         if prompt_token_count > hard_limit:
             protected_messages = [message for message in working_messages[1:] if message.get("protected")]
             minimal_messages = [working_messages[0], *protected_messages[-3:], *working_messages[-3:]]
-            prompt_token_count = self.prompt_tokens(minimal_messages, formatter)
-            return BudgetResult(minimal_messages, prompt_token_count, "minimal_fallback")
+            working_messages = minimal_messages
+            prompt_token_count = self.prompt_tokens(working_messages, formatter)
+            action = "minimal_fallback"
 
-        return BudgetResult(working_messages, prompt_token_count, "none")
+        if prompt_token_count > hard_limit:
+            working_messages, prompt_token_count = self._shrink_messages_to_hard_limit(
+                working_messages, formatter, hard_limit
+            )
+            action = f"{action}+hard_shrink" if action != "none" else "hard_shrink"
+
+        return BudgetResult(working_messages, prompt_token_count, action)
 
 
 class KVCacheManager:

@@ -1,0 +1,77 @@
+{
+  "session_id": "20260329_155434",
+  "goal": "You are building a production-quality Python module for a self-improving AI agent system.\nFollow AGENT_RULES.md at the repository root (same rules appear in the agent frozen system prompt).\n\n=== TASK ===\nModule: Task Planner (Tier 2: Intelligence)\nFile: task_planner.py\nImpact: 9.2/10\n\n=== WHAT THIS MODULE DOES ===\nDecompose goals into ordered subtasks\n\n=== DETAILED SPECIFICATION ===\nClass TaskPlanner with decompose/next_task/is_complete/replan.\n\n=== WHY IT MATTERS ===\nThis module is depended on by: Smart Tool Router\nIt builds on: Error Recovery (error_recovery.py)\n\n=== VALIDATION GATE (your code MUST pass these or it gets deleted) ===\n1. MINIMUM 3 functions or methods (not counting __init__ or test code)\n2. MINIMUM 4 assert statements (real `assert` in Python, not only the word in strings)\n3. No 'from src.' imports \u2014 skills must be standalone\n4. Must print 'ALL TESTS PASSED' when run\n5. Real logic: at least one method with depth; small helpers OK if total depth across methods is enough\n6. Handle edge cases: empty inputs, None values, boundary conditions\n\n=== AVAILABLE PREREQ APIs ===\n# error_recovery \u2014 import with: from error_recovery import *\nclass ErrorRecovery:\n    def classify_error(error_str: str) -> str:\n    def suggest_fix(error_type: str) -> str:\n    def should_retry(error_type: str, attempt_num: int) -> bool:\n    def backoff_seconds(attempt_num: int) -> float:\n\n=== IMPORT RULES (CRITICAL) ===\n- Import prereqs: from <module_name> import <ClassName>\n- NEVER import from src.memory, src.config, or src.agent\n- Use ONLY stdlib + prereq imports listed above\n- Each prereq must be USED outside import lines (calls, types, attribute access)\u2014import-only fails verification\n- If a prereq import fails, catch ImportError and provide a standalone fallback\n\n=== TEST REQUIREMENTS ===\nDecompose into 5+ steps, verify ordering\n- Include 'if __name__ == \"__main__\":' block\n- At least 4 distinct assert statements in the file (prefer 5+)\n- Print 'ALL TESTS PASSED' only if ALL assertions pass\n- Test edge cases (empty input, boundary values)\n\n=== EXISTING MODULES ===\nExisting skills:\n  skills/code_validator.py (144L)\n  skills/confidence_scorer.py (80L)\n  skills/error_recovery.py (73L)\n  skills/loop_detector.py (125L)\n  skills/memory_compressor.py (153L)\n  skills/metrics.py (114L)\n  skills/orchestrator.py (140L)\n  skills/result_evaluator.py (104L)\n  skills/search_cache.py (93L)\n  skills/self_evaluator.py (194L)\n  skills/smart_router.py (84L)\n  skills/strategy_learner.py (145L)\n  skills/task_planner.py (167L)\n\nWrite the complete module to task_planner.py. Use read_file if you need to understand any prereq. Say DONE when tests pass.",
+  "start_time": "2026-03-29T15:54:34.134591",
+  "iterations": [
+    {
+      "step": 1,
+      "tool_used": "web_search",
+      "input_args": {
+        "query": "Python task planner for AI agents with decomposition and replanning"
+      },
+      "result": "Results for 'Python task planner for AI agents with decomposition and replanning':\n\n- How to Build a Planning Agent with Task Decomposition\n  //duckduckgo.com/l/?uddg=https%3A%2F%2Fagentbus.sh%2Fposts%2Fhow%2Dto%2Dbuild%2Da%2Dplanning%2Dagent%2Dwith%2Dtask%2Ddecomposition%2F&rut=aa88bdcce924ee94a4a061f290f17e72345eb8d17515ae46a4851e51fcab8225\n  \n\n- AI Agents: Planning and Orchestration with the Planning Design Pattern ...\n  //duckduckgo.com/l/?uddg=https%3A%2F%2Ftechcommunity.microsoft.com%2Fblo",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 2,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/task_planner.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import List, Dict, Optional\n    2| from error_recovery import ErrorRecovery\n    3| \n    4| \n    5| class TaskPlanner:\n    6|     \"\"\"Manages task decomposition and execution for an agent.\"\"\"\n    7| \n    8|     def __init__(self, goal: str):\n    9|         \"\"\"Initialize the TaskPlanner with a goal.\n   10| \n   11|         Args:\n   12|             goal: The main objective the agent is trying to achieve.\n   13|         \"\"\"\n   14|         self.goal = goal\n   15|         self.tasks =",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 3,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/task_planner.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import List, Dict, Optional\n    2| from error_recovery import ErrorRecovery\n    3| \n    4| \n    5| class TaskPlanner:\n    6|     \"\"\"Manages task decomposition and execution for an agent.\"\"\"\n    7| \n    8|     def __init__(self, goal: str):\n    9|         \"\"\"Initialize the TaskPlanner with a goal.\n   10| \n   11|         Args:\n   12|             goal: The main objective the agent is trying to achieve.\n   13|         \"\"\"\n   14|         self.goal = goal\n   15|         self.tasks =",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 4,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/task_planner.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import List, Dict, Optional\n    2| from error_recovery import ErrorRecovery\n    3| \n    4| \n    5| class TaskPlanner:\n    6|     \"\"\"Manages task decomposition and execution for an agent.\"\"\"\n    7| \n    8|     def __init__(self, goal: str):\n    9|         \"\"\"Initialize the TaskPlanner with a goal.\n   10| \n   11|         Args:\n   12|             goal: The main objective the agent is trying to achieve.\n   13|         \"\"\"\n   14|         self.goal = goal\n   15|         self.tasks =",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 5,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/task_planner.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import List, Dict, Optional\n    2| from error_recovery import ErrorRecovery\n    3| \n    4| \n    5| class TaskPlanner:\n    6|     \"\"\"Manages task decomposition and execution for an agent.\"\"\"\n    7| \n    8|     def __init__(self, goal: str):\n    9|         \"\"\"Initialize the TaskPlanner with a goal.\n   10| \n   11|         Args:\n   12|             goal: The main objective the agent is trying to achieve.\n   13|         \"\"\"\n   14|         self.goal = goal\n   15|         self.tasks =",
+      "success": true,
+      "learning": "OK"
+    },
+    {
+      "step": 6,
+      "tool_used": "read_file",
+      "input_args": {
+        "path": "skills/task_planner.py",
+        "numbered": true
+      },
+      "result": "    1| from typing import List, Dict, Optional\n    2| from error_recovery import ErrorRecovery\n    3| \n    4| \n    5| class TaskPlanner:\n    6|     \"\"\"Manages task decomposition and execution for an agent.\"\"\"\n    7| \n    8|     def __init__(self, goal: str):\n    9|         \"\"\"Initialize the TaskPlanner with a goal.\n   10| \n   11|         Args:\n   12|             goal: The main objective the agent is trying to achieve.\n   13|         \"\"\"\n   14|         self.goal = goal\n   15|         self.tasks =",
+      "success": true,
+      "learning": "OK"
+    }
+  ],
+  "discoveries": [
+    "Results for 'Python task planner for AI agents with decomposition and replanning':\n\n- How to Build a Planning Agent with Task Decomposition\n  //duckduckgo.com/l/?uddg=https%3A%2F%2Fagentbus.sh%2Fposts"
+  ],
+  "failures": [],
+  "successes": []
+}

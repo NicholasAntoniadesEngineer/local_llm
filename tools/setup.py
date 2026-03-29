@@ -175,8 +175,8 @@ Monitor performance (separate terminal):
 Monitor hardware (separate terminal):
   macmon
 
-Available models (set AGENT_MODEL env var):
-  fast         - Qwen3 14B (~8GB, default improve loop, TurboQuant + ~40k context)
+Available models (set AGENT_MODEL env var); max new tokens per completion: 8,192 (see src/config.py).
+  fast         - Qwen3 14B (~8GB, default improve loop, ~40k context; highest tok/s; avoid huge prompts)
   balanced     - Qwen3 30B MoE (16GB, best quality/speed)
   quality      - Qwen3.5 27B (14GB, highest quality)
   tool_calling - Qwen3 32B (~18GB, strongest codegen)
@@ -187,10 +187,15 @@ Example:
 
 Agent rules and frozen prompt (KV message 0): see AGENT_RULES.md at repo root.
 
-Optional TurboQuant-MLX KV cache (longer context / lower memory on M-series):
+Optional TurboQuant-MLX KV cache (lower KV memory; often lower tok/s — off by default):
   ./tools/install_turboquant_mlx.sh
   (Do not use raw pip install git+... on Python 3.14 — use this script; see requirements-turboquant.txt.)
-  MLX_USE_TURBO_KV=0  # to disable and use default mlx-lm KV cache
+  MLX_USE_TURBO_KV=1  # opt-in; also set CONFIG.self_improve_setdefault_turbo_kv=True if you want improve.py to default it on
+
+If Python aborts with a Metal / mlx::core::gpu::check_error crash (unified-memory pressure), try:
+  MLX_PREFILL_STEP_SIZE=512    # smaller prefill chunks (default 1024)
+  MLX_MAX_KV_SIZE=16384        # optional sliding-window KV cap (may affect long-context quality)
+  MLX_METAL_SAFE_PROMPT_TOKENS=16384  # extra prompt cap (default 18432; empty env disables cap)
 
 Self-improve loop (`tools/improve.py`) applies defaults automatically (see src/config.py:
   self_improve_setdefault_turbo_kv, self_improve_turbo_bits, self_improve_turbo_fp16_edge_layers).

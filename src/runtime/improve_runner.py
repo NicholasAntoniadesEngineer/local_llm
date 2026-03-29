@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from src.paths import IMPROVE_SESSION_FILE
-from src.runtime.self_improve_runtime import apply_self_improve_runtime_environment
 from src.runtime.verifier import validate_generated_module
 from src.skill_tree import SkillTree
 
@@ -90,8 +89,12 @@ def run_improvement_cycle(
     model_name: str,
     agent: "MLXAgent | None" = None,
 ) -> ImprovementCycleResult:
-    """Run one improvement cycle using the shared runtime controller."""
-    apply_self_improve_runtime_environment()
+    """Run one improvement cycle using the shared runtime controller.
+
+    Callers should invoke ``apply_self_improve_runtime_environment()`` once before
+    the first cycle (``tools/improve.py`` does this); it is not repeated here to
+    avoid redundant env work every cycle.
+    """
     # Reuse the agent's SkillTree when looping so the controller, verifier, and
     # scenario picker share one DB handle + in-memory graph (avoids "no such table"
     # / stale-graph races from a second SkillTree() on the same file).
