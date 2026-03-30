@@ -1,18 +1,28 @@
 """Runtime-backed improvement cycle runner.
 
-v2: Direct generation mode — bypasses the multi-step controller loop.
-Generates complete skill modules in 1-3 attempts with retry + temperature.
+v3: Challenge-driven improvement. The agent solves coding challenges,
+measures results, and upgrades skills that are weakest at helping it succeed.
+Falls back to skill building/upgrading when no challenges remain.
 """
 
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from src.challenges import (
+    CHALLENGES,
+    Challenge,
+    ChallengeResult,
+    build_challenge_prompt,
+    get_challenges_by_difficulty,
+    run_challenge,
+)
 from src.paths import IMPROVE_SESSION_FILE, RUNS_DIR, SKILLS_DIR
 from src.runtime.verifier import validate_generated_module
 from src.skill_tree import SkillTree
@@ -25,6 +35,7 @@ if TYPE_CHECKING:
 
 SUCCESSFUL_GENERATIONS_FILE = RUNS_DIR / "successful_generations.jsonl"
 METRICS_FILE = RUNS_DIR / "metrics.json"
+CHALLENGE_RESULTS_FILE = RUNS_DIR / "challenge_results.jsonl"
 
 
 @dataclass
@@ -34,7 +45,7 @@ class ImprovementScenario:
     cycle_num: int
     skill_id: str
     skill_name: str
-    action: str
+    action: str  # "BUILDING", "UPGRADING", "CHALLENGE"
     goal_text: str
     target_path: Path
 
@@ -68,6 +79,9 @@ def _load_metrics() -> dict[str, Any]:
         "real_pass_count": 0,
         "total_attempts": 0,
         "skills_completed_by_llm": [],
+        "challenges_attempted": 0,
+        "challenges_solved": 0,
+        "challenge_scores": {},
     }
 
 
@@ -77,6 +91,11 @@ def _save_metrics(metrics: dict[str, Any]) -> None:
     gen_count = derived.get("real_generation_count", 0)
     derived["real_pass_rate"] = (
         round(derived.get("real_pass_count", 0) / gen_count, 3) if gen_count > 0 else 0.0
+    )
+    ch_attempted = derived.get("challenges_attempted", 0)
+    ch_solved = derived.get("challenges_solved", 0)
+    derived["challenge_solve_rate"] = (
+        round(ch_solved / ch_attempted, 3) if ch_attempted > 0 else 0.0
     )
     METRICS_FILE.write_text(json.dumps(derived, indent=2, default=str))
 
@@ -95,6 +114,22 @@ def _save_successful_generation(skill_id: str, prompt: str, code: str) -> None:
         f.write(json.dumps(record, default=str) + "\n")
 
 
+def _save_challenge_result(result: ChallengeResult) -> None:
+    """Save a challenge result for tracking progress over time."""
+    CHALLENGE_RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "challenge_id": result.challenge_id,
+        "solved": result.solved,
+        "score": result.score,
+        "time_s": result.time_s,
+        "error": result.error[:200] if result.error else "",
+        "code_lines": len(result.code.splitlines()),
+        "timestamp": datetime.now().isoformat(),
+    }
+    with CHALLENGE_RESULTS_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
 def _load_few_shot_example() -> str:
     """Load the best recent successful generation as a few-shot example."""
     if not SUCCESSFUL_GENERATIONS_FILE.exists():
@@ -103,7 +138,6 @@ def _load_few_shot_example() -> str:
         lines = SUCCESSFUL_GENERATIONS_FILE.read_text().strip().splitlines()
         if not lines:
             return _builtin_few_shot_example()
-        # Use the most recent success, preferring shorter ones (cleaner examples)
         best = None
         for line in reversed(lines[-10:]):
             record = json.loads(line)
@@ -125,6 +159,35 @@ def _builtin_few_shot_example() -> str:
     return ""
 
 
+def _get_solved_challenge_ids() -> set[str]:
+    """Get IDs of challenges that have been solved at least once."""
+    if not CHALLENGE_RESULTS_FILE.exists():
+        return set()
+    solved = set()
+    try:
+        for line in CHALLENGE_RESULTS_FILE.read_text().strip().splitlines():
+            record = json.loads(line)
+            if record.get("solved"):
+                solved.add(record["challenge_id"])
+    except (json.JSONDecodeError, OSError):
+        pass
+    return solved
+
+
+def _pick_next_challenge() -> Challenge | None:
+    """Pick the next unsolved challenge, prioritizing lower difficulty."""
+    solved = _get_solved_challenge_ids()
+    unsolved = [c for c in CHALLENGES if c.id not in solved]
+    if not unsolved:
+        # All solved — retry a random one to improve consistency
+        return random.choice(CHALLENGES) if CHALLENGES else None
+    # Sort by difficulty, pick easiest unsolved
+    unsolved.sort(key=lambda c: c.difficulty)
+    return unsolved[0]
+
+
+# ── Skill improvement path ───────────────────────────────────────────────
+
 def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> ImprovementScenario | None:
     """Choose the next skill build or upgrade scenario from the skill tree."""
     skill_tree.evolve_tree()
@@ -135,24 +198,31 @@ def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> Improv
         action_name = "BUILDING"
         goal_text = skill_tree.build_goal_for_skill(selected_skill)
         skill_tree.record_pull(selected_skill["id"])
-    else:
-        # Only upgrade if there's a genuinely weak skill (not already strong)
-        weak_skill = skill_tree.get_weakest_skill()
-        if weak_skill and weak_skill.get("quality_score", 999) < 150:
-            selected_skill = weak_skill
-            action_name = "UPGRADING"
-            goal_text = skill_tree.build_upgrade_goal(selected_skill)
-        else:
-            return None
+        return ImprovementScenario(
+            cycle_num=cycle_num,
+            skill_id=selected_skill["id"],
+            skill_name=selected_skill["name"],
+            action=action_name,
+            goal_text=goal_text,
+            target_path=Path("skills") / selected_skill["file"],
+        )
 
-    return ImprovementScenario(
-        cycle_num=cycle_num,
-        skill_id=selected_skill["id"],
-        skill_name=selected_skill["name"],
-        action=action_name,
-        goal_text=goal_text,
-        target_path=Path("skills") / selected_skill["file"],
-    )
+    # No new skills to build — try upgrading weakest
+    weak_skill = skill_tree.get_weakest_skill()
+    if weak_skill:
+        selected_skill = weak_skill
+        action_name = "UPGRADING"
+        goal_text = skill_tree.build_upgrade_goal(selected_skill)
+        return ImprovementScenario(
+            cycle_num=cycle_num,
+            skill_id=selected_skill["id"],
+            skill_name=selected_skill["name"],
+            action=action_name,
+            goal_text=goal_text,
+            target_path=Path("skills") / selected_skill["file"],
+        )
+
+    return None
 
 
 def _restore_target_file(target_path: Path, backup_path: Path) -> None:
@@ -175,13 +245,9 @@ def _build_direct_generation_prompt(
     if not skill:
         return scenario.goal_text
 
-    # Get full prerequisite source code (not just signatures)
     prereq_source = skill_tree.read_prereq_full_source(skill)
-
-    # Get a few-shot example
     few_shot = _load_few_shot_example()
 
-    # Build compact, focused prompt
     fail_block = ""
     if failure_context:
         fail_block = f"""
@@ -232,10 +298,7 @@ def run_direct_generation(
     agent: "MLXAgent",
     max_attempts: int = 3,
 ) -> tuple[bool, str, int]:
-    """Generate a skill module using direct single-shot LLM generation with retries.
-
-    Returns (accepted, summary, attempts_used).
-    """
+    """Generate a skill module using direct single-shot LLM generation with retries."""
     from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
 
     temperatures = [0.0, 0.3, 0.6]
@@ -250,22 +313,18 @@ def run_direct_generation(
         response = agent.generate_simple(prompt, temperature=temp)
         response = strip_thinking_tags(response)
 
-        # Extract Python code from response
         code = extract_python_code_block(response)
         if not code:
-            # Try using the raw response if it looks like Python
             if "def " in response or "class " in response:
                 code = response
             else:
-                failure_context = "Model did not output valid Python code. Output ONLY Python code, no markdown."
+                failure_context = "Model did not output valid Python code. Output ONLY Python code."
                 print(f"    No code extracted from response")
                 continue
 
-        # Write to target file
         scenario.target_path.parent.mkdir(parents=True, exist_ok=True)
         scenario.target_path.write_text(code)
 
-        # Validate
         accepted, summary = validate_generated_module(
             str(scenario.target_path), skill_tree=skill_tree
         )
@@ -275,115 +334,178 @@ def run_direct_generation(
             _save_successful_generation(scenario.skill_id, prompt[:500], code)
             return True, summary, attempt + 1
 
-        # Prepare failure context for next attempt
         failure_context = summary
         print(f"    FAILED: {summary}")
 
     return False, failure_context, max_attempts
 
 
+# ── Challenge execution path ─────────────────────────────────────────────
+
+def run_challenge_cycle(
+    cycle_num: int,
+    agent: "MLXAgent",
+) -> ImprovementCycleResult:
+    """Pick a coding challenge, solve it with the LLM, score the result."""
+    from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
+
+    challenge = _pick_next_challenge()
+    if challenge is None:
+        return ImprovementCycleResult(
+            scenario=None,
+            accepted=False,
+            summary="No challenges available.",
+            outcome="idle",
+        )
+
+    print(f"\n  CHALLENGE: {challenge.name} (difficulty {challenge.difficulty}/5)")
+
+    temperatures = [0.0, 0.3, 0.6]
+    best_result: ChallengeResult | None = None
+
+    for attempt in range(3):
+        temp = temperatures[attempt]
+        prompt = build_challenge_prompt(challenge)
+
+        if best_result and not best_result.solved:
+            prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {best_result.error}\nFix the issue."
+
+        print(f"  Attempt {attempt + 1}/3 (temp={temp})...")
+        response = agent.generate_simple(prompt, temperature=temp)
+        response = strip_thinking_tags(response)
+
+        code = extract_python_code_block(response)
+        if not code:
+            if "def " in response or "class " in response:
+                code = response
+            else:
+                print(f"    No code extracted")
+                continue
+
+        result = run_challenge(challenge, code)
+        _save_challenge_result(result)
+
+        if result.solved:
+            print(f"    SOLVED in {result.time_s:.1f}s")
+            best_result = result
+            break
+        else:
+            print(f"    FAILED: {result.error[:100]}")
+            best_result = result
+
+    # Update metrics
+    metrics = _load_metrics()
+    metrics["challenges_attempted"] = metrics.get("challenges_attempted", 0) + 1
+    solved = best_result is not None and best_result.solved
+    if solved:
+        metrics["challenges_solved"] = metrics.get("challenges_solved", 0) + 1
+    scores = metrics.get("challenge_scores", {})
+    scores[challenge.id] = 1.0 if solved else 0.0
+    metrics["challenge_scores"] = scores
+    _save_metrics(metrics)
+
+    scenario = ImprovementScenario(
+        cycle_num=cycle_num,
+        skill_id=challenge.id,
+        skill_name=challenge.name,
+        action="CHALLENGE",
+        goal_text=challenge.description,
+        target_path=Path("run_output_data") / f"challenge_{challenge.id}.py",
+    )
+
+    outcome = "challenge_solved" if solved else "challenge_failed"
+    summary = f"Challenge '{challenge.name}': {'SOLVED' if solved else 'FAILED'}"
+    if best_result and not solved:
+        summary += f" — {best_result.error[:100]}"
+
+    _append_improve_journal({
+        "cycle_num": cycle_num,
+        "outcome": outcome,
+        "skill_id": challenge.id,
+        "summary": summary,
+    })
+
+    return ImprovementCycleResult(
+        scenario=scenario,
+        accepted=solved,
+        summary=summary,
+        outcome=outcome,
+    )
+
+
+# ── Main cycle ───────────────────────────────────────────────────────────
+
 def run_improvement_cycle(
     cycle_num: int,
     model_name: str,
     agent: "MLXAgent | None" = None,
 ) -> ImprovementCycleResult:
-    """Run one improvement cycle using direct generation.
+    """Run one improvement cycle: challenge or skill building.
 
-    Callers should invoke ``apply_self_improve_runtime_environment()`` once before
-    the first cycle (``tools/improve.py`` does this); it is not repeated here to
-    avoid redundant env work every cycle.
+    Priority:
+    1. Build any new locked skills (rarely — all 13 seeds are built)
+    2. Solve coding challenges (primary work)
+    3. Upgrade weakest skill (when all challenges solved recently)
     """
     skill_tree = agent.skill_tree if agent is not None else SkillTree()
-    scenario = select_improvement_scenario(cycle_num, skill_tree)
-    if scenario is None:
-        result = ImprovementCycleResult(
-            scenario=None,
-            accepted=False,
-            summary="All skills complete and no weak skill requires upgrade.",
-            outcome="idle",
+
+    # Step 1: Check if any new skills need building
+    skill_tree.evolve_tree()
+    new_skill = skill_tree.peek_next_skill()
+    if new_skill:
+        scenario = ImprovementScenario(
+            cycle_num=cycle_num,
+            skill_id=new_skill["id"],
+            skill_name=new_skill["name"],
+            action="BUILDING",
+            goal_text=skill_tree.build_goal_for_skill(new_skill),
+            target_path=Path("skills") / new_skill["file"],
         )
-        _append_improve_journal({"cycle_num": cycle_num, "outcome": result.outcome, "summary": result.summary})
-        return result
+        skill_tree.record_pull(new_skill["id"])
 
-    scenario.target_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_path = scenario.target_path.with_suffix(scenario.target_path.suffix + ".bak")
-    if scenario.target_path.exists():
-        shutil.copy2(scenario.target_path, backup_path)
+        # Pre-validate
+        if scenario.target_path.exists():
+            pre_ok, pre_msg = validate_generated_module(str(scenario.target_path), skill_tree=skill_tree)
+            if pre_ok:
+                skill_tree.mark_completed(scenario.skill_id, pre_msg)
+                return ImprovementCycleResult(
+                    scenario=scenario, accepted=True,
+                    summary=f"Pre-validated: {pre_msg}", outcome="pre_validated",
+                )
 
-    # Pre-validate: if the file already passes, skip LLM generation
-    pre_ok = False
-    pre_message = ""
-    if scenario.target_path.exists():
-        pre_ok, pre_message = validate_generated_module(str(scenario.target_path), skill_tree=skill_tree)
-    if pre_ok:
-        skill_tree.mark_completed(scenario.skill_id, pre_message)
-        if backup_path.exists():
-            backup_path.unlink()
-        result = ImprovementCycleResult(
-            scenario=scenario,
-            accepted=True,
-            summary=f"Pre-validated: {pre_message}",
-            outcome="pre_validated",
+        # Build with LLM
+        if agent is None:
+            from src.agent import MLXAgent
+            agent = MLXAgent(config_model_name=model_name, goal=scenario.goal_text)
+
+        skill_tree.record_attempt(scenario.skill_id)
+        accepted, summary, attempts = run_direct_generation(scenario, skill_tree, agent)
+
+        metrics = _load_metrics()
+        metrics["real_generation_count"] = metrics.get("real_generation_count", 0) + 1
+        metrics["total_attempts"] = metrics.get("total_attempts", 0) + attempts
+        if accepted:
+            metrics["real_pass_count"] = metrics.get("real_pass_count", 0) + 1
+            skill_tree.mark_completed(scenario.skill_id, summary)
+        else:
+            skill_tree.mark_failed(scenario.skill_id, summary)
+        _save_metrics(metrics)
+
+        _append_improve_journal({
+            "cycle_num": cycle_num,
+            "outcome": "accepted" if accepted else "failed",
+            "skill_id": scenario.skill_id,
+            "summary": f"[{attempts} attempts] {summary}",
+        })
+        return ImprovementCycleResult(
+            scenario=scenario, accepted=accepted,
+            summary=f"[{attempts} attempts] {summary}",
+            outcome="accepted" if accepted else "failed",
         )
-        _append_improve_journal(
-            {
-                "cycle_num": cycle_num,
-                "outcome": result.outcome,
-                "skill_id": scenario.skill_id,
-                "target_path": str(scenario.target_path),
-                "summary": result.summary,
-            }
-        )
-        return result
 
-    # ── Direct generation mode ──────────────────────────────────────────
-    # Record cooldown AFTER pre-validation to prevent treadmill on already-passing skills
-    skill_tree.record_attempt(scenario.skill_id)
-
+    # Step 2: Solve coding challenges (primary work loop)
     if agent is None:
         from src.agent import MLXAgent
-        agent = MLXAgent(config_model_name=model_name, goal=scenario.goal_text)
+        agent = MLXAgent(config_model_name=model_name, goal="challenge")
 
-    accepted, summary, attempts_used = run_direct_generation(
-        scenario, skill_tree, agent, max_attempts=3
-    )
-
-    # ── Track metrics ───────────────────────────────────────────────────
-    metrics = _load_metrics()
-    metrics["real_generation_count"] = metrics.get("real_generation_count", 0) + 1
-    metrics["total_attempts"] = metrics.get("total_attempts", 0) + attempts_used
-    if accepted:
-        metrics["real_pass_count"] = metrics.get("real_pass_count", 0) + 1
-        completed_list = metrics.get("skills_completed_by_llm", [])
-        if scenario.skill_id not in completed_list:
-            completed_list.append(scenario.skill_id)
-        metrics["skills_completed_by_llm"] = completed_list
-    _save_metrics(metrics)
-
-    # ── Update skill tree ───────────────────────────────────────────────
-    if accepted:
-        skill_tree.mark_completed(scenario.skill_id, summary)
-        if backup_path.exists():
-            backup_path.unlink()
-    else:
-        skill_tree.mark_failed(scenario.skill_id, summary)
-        _restore_target_file(scenario.target_path, backup_path)
-
-    outcome = "accepted" if accepted else "failed"
-    result = ImprovementCycleResult(
-        scenario=scenario,
-        accepted=accepted,
-        summary=f"[{attempts_used} attempts] {summary}",
-        outcome=outcome,
-    )
-    _append_improve_journal(
-        {
-            "cycle_num": cycle_num,
-            "outcome": outcome,
-            "skill_id": scenario.skill_id,
-            "target_path": str(scenario.target_path),
-            "summary": result.summary,
-            "attempts": attempts_used,
-        }
-    )
-    return result
+    return run_challenge_cycle(cycle_num, agent)
