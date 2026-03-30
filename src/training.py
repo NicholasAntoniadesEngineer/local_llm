@@ -171,14 +171,19 @@ def run_lora_finetuning(
             import subprocess
             ADAPTER_DIR.mkdir(parents=True, exist_ok=True)
 
+            # mlx_lm LoRA expects: --model, --train, --adapter-path, etc.
+            # The training file should be named train.jsonl in the data dir
+            train_file = data_path.parent / "train.jsonl"
+            if data_path != train_file:
+                import shutil as _shutil
+                _shutil.copy2(data_path, train_file)
+
             cmd = [
                 sys.executable, "-m", "mlx_lm.lora",
                 "--model", model_name,
                 "--data", str(data_path.parent),
-                "--train",
                 "--adapter-path", str(ADAPTER_DIR),
-                "--lora-rank", str(lora_rank),
-                "--num-layers", "8",
+                "--lora-layers", str(lora_rank),
                 "--iters", str(readiness["total_examples"] * num_epochs),
                 "--learning-rate", str(learning_rate),
                 "--batch-size", str(batch_size),

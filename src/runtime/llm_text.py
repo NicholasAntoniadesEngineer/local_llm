@@ -38,10 +38,18 @@ def extract_python_code_block(text: str) -> str | None:
         if "def " in code or "class " in code or "import " in code:
             return code
 
-    # Priority 3: raw unfenced Python — accept if first non-empty line is valid Python
+    # Priority 3: raw unfenced Python — accept if it looks like a Python file
     stripped = text.strip()
     first_line = stripped.split("\n")[0].strip()
-    if first_line.startswith(("import ", "from ", "def ", "class ", "#!", "# ")):
+    python_starts = ("import ", "from ", "def ", "class ", "#!", "# ", '"""', "'''", "@")
+    if first_line.startswith(python_starts):
+        return stripped
+
+    # Priority 4: check if response contains def/class anywhere and starts cleanly
+    # (model might output a blank line or comment before code)
+    if ("def " in stripped or "class " in stripped) and not any(
+        c in stripped[:50] for c in ("Here", "This", "The ", "I ", "Let", "Below")
+    ):
         return stripped
 
     return None

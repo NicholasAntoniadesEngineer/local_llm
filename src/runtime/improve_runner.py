@@ -91,7 +91,7 @@ def _load_metrics() -> dict[str, Any]:
     }
 
 
-def _save_metrics(metrics: dict[str, Any]) -> None:
+def _save_metrics(metrics: dict[str, Any], solve_rates: dict[int, float] | None = None) -> None:
     METRICS_FILE.parent.mkdir(parents=True, exist_ok=True)
     derived = {**metrics}
     gen_count = derived.get("real_generation_count", 0)
@@ -103,8 +103,9 @@ def _save_metrics(metrics: dict[str, Any]) -> None:
     derived["challenge_solve_rate"] = (
         round(ch_solved / ch_attempted, 3) if ch_attempted > 0 else 0.0
     )
-    # Include solve rates per difficulty and current target for observability
-    solve_rates = _get_solve_rates_by_difficulty()
+    # Include solve rates per difficulty (pass pre-computed to avoid extra file read)
+    if solve_rates is None:
+        solve_rates = _get_solve_rates_by_difficulty()
     derived["solve_rates_by_difficulty"] = {str(k): round(v, 3) for k, v in solve_rates.items()}
     METRICS_FILE.write_text(json.dumps(derived, indent=2, default=str))
 
@@ -132,6 +133,42 @@ def _save_challenge_result(result: ChallengeResult) -> None:
         "code_lines": len(result.code.splitlines()),
         "timestamp": datetime.now().isoformat(),
     })
+
+
+SESSION_LOG_FILE = RUNS_DIR / "session_learnings.jsonl"
+
+
+def _save_session_record(challenge: Challenge, solved: bool, result: ChallengeResult | None) -> None:
+    """Save a compact session record for cross-session learning. One file, append-only."""
+    record: dict[str, Any] = {
+        "goal": f"challenge:{challenge.id}",
+        "challenge": challenge.name,
+        "difficulty": challenge.difficulty,
+        "solved": solved,
+        "timestamp": datetime.now().isoformat(),
+    }
+    if solved and result:
+        record["successes"] = [{"approach": f"Solved {challenge.name}", "result": result.code[:150]}]
+        record["failures"] = []
+    elif result:
+        record["failures"] = [{"reason": result.error[:150]}]
+        record["successes"] = []
+    _append_jsonl(SESSION_LOG_FILE, record)
+
+
+def _load_session_learnings(challenge_name: str, n: int = 3) -> list[dict]:
+    """Load relevant prior session learnings for a challenge."""
+    records = _read_jsonl(SESSION_LOG_FILE)
+    # Score by relevance to current challenge
+    goal_words = set(challenge_name.lower().split())
+    scored = []
+    for r in records[-200:]:  # Last 200 records
+        past_words = set(r.get("challenge", "").lower().split())
+        overlap = len(goal_words & past_words)
+        if overlap > 0 or r.get("difficulty", 0) > 0:
+            scored.append((overlap, r))
+    scored.sort(key=lambda x: -x[0])
+    return [s[1] for s in scored[:n]]
 
 
 def _load_few_shot_example() -> str:
@@ -196,21 +233,44 @@ def _append_jsonl(path: Path, record: dict) -> None:
         pass
 
 
+def _analyze_challenge_history() -> tuple[set[str], dict[str, int], dict[int, float]]:
+    """Single-pass analysis of challenge results. Returns (solved_ids, attempt_counts, solve_rates).
+
+    Reads CHALLENGE_RESULTS_FILE once and computes all three metrics in one pass.
+    """
+    records = _read_jsonl(CHALLENGE_RESULTS_FILE)
+    solved: set[str] = set()
+    counts: dict[str, int] = {}
+    by_difficulty: dict[int, list[bool]] = {}
+
+    challenge_map = {c.id: c.difficulty for c in CHALLENGES}
+
+    for record in records:
+        cid = record.get("challenge_id", "")
+        counts[cid] = counts.get(cid, 0) + 1
+        if record.get("solved"):
+            solved.add(cid)
+        diff = challenge_map.get(cid, 0)
+        if diff > 0:
+            by_difficulty.setdefault(diff, []).append(bool(record.get("solved")))
+
+    solve_rates = {
+        diff: sum(results) / len(results) if results else 0.0
+        for diff, results in by_difficulty.items()
+    }
+
+    return solved, counts, solve_rates
+
+
 def _get_solved_challenge_ids() -> set[str]:
     """Get IDs of challenges that have been solved at least once."""
-    solved = set()
-    for record in _read_jsonl(CHALLENGE_RESULTS_FILE):
-        if record.get("solved"):
-            solved.add(record.get("challenge_id", ""))
+    solved, _, _ = _analyze_challenge_history()
     return solved
 
 
 def _get_attempt_counts() -> dict[str, int]:
     """Count how many times each challenge has been attempted."""
-    counts: dict[str, int] = {}
-    for record in _read_jsonl(CHALLENGE_RESULTS_FILE):
-        cid = record.get("challenge_id", "")
-        counts[cid] = counts.get(cid, 0) + 1
+    _, counts, _ = _analyze_challenge_history()
     return counts
 
 
@@ -258,21 +318,8 @@ def _get_common_failure_patterns() -> str:
 
 def _get_solve_rates_by_difficulty() -> dict[int, float]:
     """Compute solve rate per difficulty level from history."""
-    records = _read_jsonl(CHALLENGE_RESULTS_FILE)
-    by_difficulty: dict[int, list[bool]] = {}
-
-    challenge_map = {c.id: c.difficulty for c in CHALLENGES}
-    for record in records:
-        cid = record.get("challenge_id", "")
-        diff = challenge_map.get(cid, 0)
-        if diff not in by_difficulty:
-            by_difficulty[diff] = []
-        by_difficulty[diff].append(bool(record.get("solved")))
-
-    return {
-        diff: sum(results) / len(results) if results else 0.0
-        for diff, results in by_difficulty.items()
-    }
+    _, _, solve_rates = _analyze_challenge_history()
+    return solve_rates
 
 
 def _pick_next_challenge() -> Challenge | None:
@@ -287,9 +334,8 @@ def _pick_next_challenge() -> Challenge | None:
     if not CHALLENGES:
         return None
 
-    solved = _get_solved_challenge_ids()
-    solve_rates = _get_solve_rates_by_difficulty()
-    counts = _get_attempt_counts()
+    # Single-pass analysis (reads file once, not three times)
+    solved, counts, solve_rates = _analyze_challenge_history()
 
     # Determine target difficulty based on solve rates
     target_difficulty = 1
@@ -496,25 +542,19 @@ def run_challenge_cycle(
     failure_hints = _get_common_failure_patterns()
 
     # FEEDBACK LOOP 5: Cross-session memory — learn from prior sessions
-    session_context = ""
-    try:
-        from src.memory import SessionMemory
-        prior_sessions = SessionMemory.retrieve_relevant(
-            goal=f"challenge {challenge.name} {challenge.description[:50]}",
-            n=2,
-        )
-        if prior_sessions:
-            parts = []
-            for ps in prior_sessions:
-                if ps.get("successes"):
-                    parts.append(f"Prior success: {ps['successes'][0]}")
-                if ps.get("failures"):
-                    parts.append(f"Prior failure: {ps['failures'][0]}")
-            if parts:
-                session_context = "LEARNINGS FROM PRIOR SESSIONS:\n" + "\n".join(parts)
-                failure_hints = (failure_hints + "\n\n" + session_context).strip() if failure_hints else session_context
-    except Exception:
-        pass
+    prior = _load_session_learnings(challenge.name, n=3)
+    if prior:
+        parts = []
+        for ps in prior:
+            if ps.get("solved") and ps.get("successes"):
+                s = ps["successes"][0]
+                parts.append(f"Previously solved {ps.get('challenge','?')}: {s.get('approach','')}")
+            elif ps.get("failures"):
+                f = ps["failures"][0]
+                parts.append(f"Previously failed {ps.get('challenge','?')}: {f.get('reason','')[:80]}")
+        if parts:
+            session_block = "LEARNINGS FROM PRIOR RUNS:\n" + "\n".join(parts[:3])
+            failure_hints = (failure_hints + "\n\n" + session_block).strip() if failure_hints else session_block
 
     solve_rates = _get_solve_rates_by_difficulty()
     rate_str = ", ".join(f"d{d}={r:.0%}" for d, r in sorted(solve_rates.items()) if r > 0)
@@ -568,23 +608,12 @@ def run_challenge_cycle(
     scores = metrics.get("challenge_scores", {})
     scores[challenge.id] = 1.0 if solved else 0.0
     metrics["challenge_scores"] = scores
-    _save_metrics(metrics)
+    _save_metrics(metrics, solve_rates=solve_rates)
 
     # Save session data for cross-session learning (FEEDBACK LOOP 5)
+    # Use a single session file per process run (not per challenge)
     try:
-        from src.memory import MemoryManager
-        mm = MemoryManager(goal=f"challenge:{challenge.id}")
-        if solved and best_result:
-            mm.record_success(
-                approach=f"Solved {challenge.name} (difficulty {challenge.difficulty})",
-                result=f"Code: {best_result.code[:200]}",
-            )
-        elif best_result:
-            mm.record_failure(
-                attempt=f"Failed {challenge.name} (difficulty {challenge.difficulty})",
-                reason=best_result.error[:200],
-            )
-        mm.memory.save(mm.memory_file)
+        _save_session_record(challenge, solved, best_result)
     except Exception:
         pass
 
@@ -698,9 +727,11 @@ def run_improvement_cycle(
     try:
         from src.challenge_generator import load_generated_challenges
         generated = load_generated_challenges()
+        existing_ids = {c.id for c in CHALLENGES}
         for gen_challenge, _ in generated:
-            if gen_challenge not in CHALLENGES:
+            if gen_challenge.id not in existing_ids:
                 CHALLENGES.append(gen_challenge)
+                existing_ids.add(gen_challenge.id)
     except Exception:
         pass
 
@@ -721,7 +752,8 @@ def run_improvement_cycle(
             result = generate_new_challenge(agent, target_difficulty=target)
             if result:
                 new_challenge, _ = result
-                CHALLENGES.append(new_challenge)
+                if new_challenge.id not in {c.id for c in CHALLENGES}:
+                    CHALLENGES.append(new_challenge)
         except Exception as e:
             print(f"  Challenge generation failed: {e}")
 
