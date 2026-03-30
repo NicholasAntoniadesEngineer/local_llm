@@ -1,8 +1,7 @@
 """Runtime-backed improvement cycle runner.
 
-v3: Challenge-driven improvement. The agent solves coding challenges,
-measures results, and upgrades skills that are weakest at helping it succeed.
-Falls back to skill building/upgrading when no challenges remain.
+v4: Full self-improvement with feedback loops, dynamic challenge generation,
+cross-session memory, and LoRA training data collection.
 """
 
 from __future__ import annotations
@@ -496,6 +495,27 @@ def run_challenge_cycle(
     # FEEDBACK LOOP 2: Load common failure patterns as hints
     failure_hints = _get_common_failure_patterns()
 
+    # FEEDBACK LOOP 5: Cross-session memory — learn from prior sessions
+    session_context = ""
+    try:
+        from src.memory import SessionMemory
+        prior_sessions = SessionMemory.retrieve_relevant(
+            goal=f"challenge {challenge.name} {challenge.description[:50]}",
+            n=2,
+        )
+        if prior_sessions:
+            parts = []
+            for ps in prior_sessions:
+                if ps.get("successes"):
+                    parts.append(f"Prior success: {ps['successes'][0]}")
+                if ps.get("failures"):
+                    parts.append(f"Prior failure: {ps['failures'][0]}")
+            if parts:
+                session_context = "LEARNINGS FROM PRIOR SESSIONS:\n" + "\n".join(parts)
+                failure_hints = (failure_hints + "\n\n" + session_context).strip() if failure_hints else session_context
+    except Exception:
+        pass
+
     solve_rates = _get_solve_rates_by_difficulty()
     rate_str = ", ".join(f"d{d}={r:.0%}" for d, r in sorted(solve_rates.items()) if r > 0)
     print(f"\n  CHALLENGE: {challenge.name} (difficulty {challenge.difficulty}/5)")
@@ -504,7 +524,7 @@ def run_challenge_cycle(
     if few_shot:
         print(f"  Few-shot: {len(few_shot)} chars from prior success")
     if failure_hints:
-        print(f"  Failure hints injected")
+        print(f"  Feedback injected ({len(failure_hints)} chars)")
 
     temperatures = [0.0, 0.3, 0.6]
     best_result: ChallengeResult | None = None
@@ -549,6 +569,24 @@ def run_challenge_cycle(
     scores[challenge.id] = 1.0 if solved else 0.0
     metrics["challenge_scores"] = scores
     _save_metrics(metrics)
+
+    # Save session data for cross-session learning (FEEDBACK LOOP 5)
+    try:
+        from src.memory import MemoryManager
+        mm = MemoryManager(goal=f"challenge:{challenge.id}")
+        if solved and best_result:
+            mm.record_success(
+                approach=f"Solved {challenge.name} (difficulty {challenge.difficulty})",
+                result=f"Code: {best_result.code[:200]}",
+            )
+        elif best_result:
+            mm.record_failure(
+                attempt=f"Failed {challenge.name} (difficulty {challenge.difficulty})",
+                reason=best_result.error[:200],
+            )
+        mm.memory.save(mm.memory_file)
+    except Exception:
+        pass
 
     scenario = ImprovementScenario(
         cycle_num=cycle_num,
@@ -655,5 +693,51 @@ def run_improvement_cycle(
     if agent is None:
         from src.agent import MLXAgent
         agent = MLXAgent(config_model_name=model_name, goal="challenge")
+
+    # Load any previously generated challenges so we have more than 10
+    try:
+        from src.challenge_generator import load_generated_challenges
+        generated = load_generated_challenges()
+        for gen_challenge, _ in generated:
+            if gen_challenge not in CHALLENGES:
+                CHALLENGES.append(gen_challenge)
+    except Exception:
+        pass
+
+    # Check if all existing challenges are solved — generate new ones
+    solved_ids = _get_solved_challenge_ids()
+    unsolved_count = sum(1 for c in CHALLENGES if c.id not in solved_ids)
+    if unsolved_count == 0:
+        try:
+            from src.challenge_generator import generate_new_challenge
+            solve_rates = _get_solve_rates_by_difficulty()
+            # Target difficulty based on current mastery
+            target = 2
+            for d, rate in sorted(solve_rates.items()):
+                if rate >= 0.8:
+                    target = d + 1
+            target = min(target, 4)
+            print(f"\n  All {len(CHALLENGES)} challenges solved. Generating new (difficulty {target})...")
+            result = generate_new_challenge(agent, target_difficulty=target)
+            if result:
+                new_challenge, _ = result
+                CHALLENGES.append(new_challenge)
+        except Exception as e:
+            print(f"  Challenge generation failed: {e}")
+
+    # Check if LoRA training has enough data (periodic check)
+    metrics = _load_metrics()
+    total_solved = metrics.get("challenges_solved", 0)
+    last_training_at = metrics.get("last_lora_training_at", 0)
+    if total_solved >= 15 and total_solved - last_training_at >= 10:
+        try:
+            from src.training import check_training_readiness
+            readiness = check_training_readiness()
+            if readiness["ready"]:
+                print(f"\n  LoRA training data ready: {readiness['total_examples']} examples")
+                print(f"  Run: python -m src.training  (to fine-tune the model)")
+                metrics["last_lora_check"] = total_solved
+        except Exception:
+            pass
 
     return run_challenge_cycle(cycle_num, agent)
