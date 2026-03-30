@@ -211,21 +211,106 @@ def _get_attempt_counts() -> dict[str, int]:
     return counts
 
 
-def _pick_next_challenge() -> Challenge | None:
-    """Pick the next challenge to attempt.
+def _load_challenge_few_shot() -> str:
+    """Load the most recent successful challenge solution for in-context learning."""
+    records = _read_jsonl(SUCCESSFUL_GENERATIONS_FILE)
+    # Find most recent challenge solution (not skill)
+    for record in reversed(records):
+        code = record.get("code", "")
+        if code and record.get("lines", 0) < 80:  # Prefer compact solutions
+            return code
+    return ""
 
-    Priority: unsolved (easiest first), then least-attempted (for consistency).
+
+def _get_common_failure_patterns() -> str:
+    """Analyze past failures and return a hint block for the prompt."""
+    records = _read_jsonl(CHALLENGE_RESULTS_FILE)
+    error_counts: dict[str, int] = {}
+    error_examples: dict[str, str] = {}
+
+    for record in records:
+        if record.get("solved"):
+            continue
+        error = record.get("error", "")
+        # Extract error type from bracketed prefix: [syntax_error] ...
+        if error.startswith("[") and "]" in error:
+            error_type = error[1:error.index("]")]
+            error_counts[error_type] = error_counts.get(error_type, 0) + 1
+            if error_type not in error_examples:
+                error_examples[error_type] = error[error.index("]") + 2:][:80]
+
+    if not error_counts:
+        return ""
+
+    # Build hint block from top 3 most common errors
+    sorted_errors = sorted(error_counts.items(), key=lambda x: -x[1])[:3]
+    lines = ["AVOID THESE COMMON MISTAKES:"]
+    for error_type, count in sorted_errors:
+        example = error_examples.get(error_type, "")
+        label = error_type.replace("_", " ").title()
+        lines.append(f"- {label} ({count}x): {example}")
+
+    return "\n".join(lines)
+
+
+def _get_solve_rates_by_difficulty() -> dict[int, float]:
+    """Compute solve rate per difficulty level from history."""
+    records = _read_jsonl(CHALLENGE_RESULTS_FILE)
+    by_difficulty: dict[int, list[bool]] = {}
+
+    challenge_map = {c.id: c.difficulty for c in CHALLENGES}
+    for record in records:
+        cid = record.get("challenge_id", "")
+        diff = challenge_map.get(cid, 0)
+        if diff not in by_difficulty:
+            by_difficulty[diff] = []
+        by_difficulty[diff].append(bool(record.get("solved")))
+
+    return {
+        diff: sum(results) / len(results) if results else 0.0
+        for diff, results in by_difficulty.items()
+    }
+
+
+def _pick_next_challenge() -> Challenge | None:
+    """Pick the next challenge using metrics-driven difficulty progression.
+
+    Strategy:
+    1. Pick unsolved challenges at the current difficulty level
+    2. If all at current level solved with >80% rate, move to next level
+    3. If current level has <30% rate after 5+ attempts, drop back
+    4. Within a level, pick the least-attempted challenge
     """
     if not CHALLENGES:
         return None
-    solved = _get_solved_challenge_ids()
-    unsolved = [c for c in CHALLENGES if c.id not in solved]
-    if unsolved:
-        unsolved.sort(key=lambda c: c.difficulty)
-        return unsolved[0]
 
-    # All solved — pick least-attempted challenge for consistency practice
+    solved = _get_solved_challenge_ids()
+    solve_rates = _get_solve_rates_by_difficulty()
     counts = _get_attempt_counts()
+
+    # Determine target difficulty based on solve rates
+    target_difficulty = 1
+    for diff in sorted(solve_rates.keys()):
+        rate = solve_rates[diff]
+        attempts_at_diff = sum(
+            counts.get(c.id, 0) for c in CHALLENGES if c.difficulty == diff
+        )
+        if rate >= 0.8 and attempts_at_diff >= 3:
+            target_difficulty = diff + 1  # Ready for harder challenges
+        elif rate < 0.3 and attempts_at_diff >= 5:
+            target_difficulty = max(1, diff)  # Stay at this level
+            break
+
+    # Pick unsolved at target difficulty (or lower)
+    candidates = [
+        c for c in CHALLENGES
+        if c.id not in solved and c.difficulty <= target_difficulty
+    ]
+    if candidates:
+        candidates.sort(key=lambda c: (c.difficulty, counts.get(c.id, 0)))
+        return candidates[0]
+
+    # All at target solved — pick least-attempted at any level
     return min(CHALLENGES, key=lambda c: counts.get(c.id, 0))
 
 
@@ -382,7 +467,14 @@ def run_challenge_cycle(
     cycle_num: int,
     agent: "MLXAgent",
 ) -> ImprovementCycleResult:
-    """Pick a coding challenge, solve it with the LLM, score the result."""
+    """Pick a coding challenge, solve it with the LLM, score the result.
+
+    Feedback loops active:
+    1. Few-shot: includes best recent successful solution in prompt
+    2. Failure patterns: warns about common mistake types
+    3. Difficulty: picks challenges based on actual solve rates
+    4. Error classification: structured error types for pattern tracking
+    """
     from src.runtime.llm_text import extract_python_code_block, diagnose_extraction_failure, strip_thinking_tags
 
     challenge = _pick_next_challenge()
@@ -394,14 +486,28 @@ def run_challenge_cycle(
             outcome="idle",
         )
 
+    # FEEDBACK LOOP 1: Load a successful solution as few-shot context
+    few_shot = _load_challenge_few_shot()
+
+    # FEEDBACK LOOP 2: Load common failure patterns as hints
+    failure_hints = _get_common_failure_patterns()
+
+    solve_rates = _get_solve_rates_by_difficulty()
+    rate_str = ", ".join(f"d{d}={r:.0%}" for d, r in sorted(solve_rates.items()) if r > 0)
     print(f"\n  CHALLENGE: {challenge.name} (difficulty {challenge.difficulty}/5)")
+    if rate_str:
+        print(f"  Solve rates: {rate_str}")
+    if few_shot:
+        print(f"  Few-shot: {len(few_shot)} chars from prior success")
+    if failure_hints:
+        print(f"  Failure hints injected")
 
     temperatures = [0.0, 0.3, 0.6]
     best_result: ChallengeResult | None = None
 
     for attempt in range(3):
         temp = temperatures[attempt]
-        prompt = build_challenge_prompt(challenge)
+        prompt = build_challenge_prompt(challenge, few_shot=few_shot, failure_hints=failure_hints)
 
         if best_result and not best_result.solved:
             prompt += f"\n\nPREVIOUS ATTEMPT FAILED: {best_result.error}\nFix the issue."
@@ -421,6 +527,8 @@ def run_challenge_cycle(
 
         if result.solved:
             print(f"    SOLVED in {result.time_s:.1f}s")
+            # FEEDBACK LOOP 1: Save solution for future few-shot context
+            _save_successful_generation(challenge.id, prompt[:300], code)
             best_result = result
             break
         else:

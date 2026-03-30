@@ -253,26 +253,77 @@ print("PASS")
 
 # ── Challenge runner ─────────────────────────────────────────────────────
 
-def build_challenge_prompt(challenge: Challenge) -> str:
-    """Build a prompt for the LLM to solve a coding challenge."""
+def build_challenge_prompt(
+    challenge: Challenge,
+    few_shot: str = "",
+    failure_hints: str = "",
+) -> str:
+    """Build a prompt for the LLM to solve a coding challenge.
+
+    Args:
+        challenge: The challenge to solve.
+        few_shot: Optional successful solution from a previous challenge (for in-context learning).
+        failure_hints: Optional "common mistakes to avoid" block from past failures.
+    """
     test_code = CHALLENGE_TESTS.get(challenge.id, "")
-    return f"""Solve this coding challenge. Output ONLY Python code, nothing else.
 
-CHALLENGE: {challenge.name}
-{challenge.description}
+    parts = [
+        f"Solve this coding challenge. Output ONLY Python code, nothing else.",
+        f"\nCHALLENGE: {challenge.name}\n{challenge.description}",
+        f"\nYour code will be tested with this test code appended to it:\n```\n{test_code}\n```",
+    ]
 
-Your code will be tested with this test code appended to it:
-```
-{test_code}
-```
+    if few_shot:
+        parts.append(f"\nHere is a successful solution to a DIFFERENT challenge (for reference style):\n```\n{few_shot}\n```")
 
-Write ONLY the Python code needed (imports, function/class definitions).
-Include any imports your code needs (like `import time`, `from collections import ...`).
-No if __name__ block. No explanation. No markdown. Just valid Python code."""
+    if failure_hints:
+        parts.append(f"\n{failure_hints}")
+
+    parts.append(
+        "\nWrite ONLY the Python code needed (imports, function/class definitions)."
+        "\nInclude any imports your code needs (like `import time`, `from collections import ...`)."
+        "\nNo if __name__ block. No explanation. No markdown. Just valid Python code."
+    )
+
+    return "\n".join(parts)
+
+
+def _classify_error(stderr: str, stdout: str) -> str:
+    """Classify an error into a category for failure pattern tracking."""
+    combined = (stderr + stdout).lower()
+    if "syntaxerror" in combined:
+        return "syntax_error"
+    if "nameerror" in combined or "importerror" in combined or "modulenotfounderror" in combined:
+        return "missing_import"
+    if "assertionerror" in combined:
+        return "assertion_error"
+    if "typeerror" in combined:
+        return "type_error"
+    if "attributeerror" in combined:
+        return "attribute_error"
+    if "indexerror" in combined or "keyerror" in combined:
+        return "index_key_error"
+    if "zerodivisionerror" in combined:
+        return "zero_division"
+    return "runtime_error"
 
 
 def run_challenge(challenge: Challenge, code: str) -> ChallengeResult:
     """Run a challenge solution and score it."""
+    # Pre-check: catch syntax errors before subprocess
+    try:
+        ast.parse(code)
+    except SyntaxError as e:
+        return ChallengeResult(
+            challenge_id=challenge.id,
+            solved=False,
+            score=0.0,
+            output="",
+            error=f"[syntax_error] {e}",
+            time_s=0.0,
+            code=code,
+        )
+
     test_code = CHALLENGE_TESTS.get(challenge.id, "")
     full_code = code + "\n\n" + test_code
 
@@ -298,12 +349,13 @@ def run_challenge(challenge: Challenge, code: str) -> ChallengeResult:
                 time_s=elapsed,
                 code=code,
             )
+        error_type = _classify_error(result.stderr, result.stdout)
         return ChallengeResult(
             challenge_id=challenge.id,
             solved=False,
             score=0.0,
             output=result.stdout[:300],
-            error=result.stderr[:300],
+            error=f"[{error_type}] {result.stderr[:250]}",
             time_s=elapsed,
             code=code,
         )
