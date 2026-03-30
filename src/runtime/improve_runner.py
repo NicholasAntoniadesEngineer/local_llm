@@ -104,6 +104,9 @@ def _save_metrics(metrics: dict[str, Any]) -> None:
     derived["challenge_solve_rate"] = (
         round(ch_solved / ch_attempted, 3) if ch_attempted > 0 else 0.0
     )
+    # Include solve rates per difficulty and current target for observability
+    solve_rates = _get_solve_rates_by_difficulty()
+    derived["solve_rates_by_difficulty"] = {str(k): round(v, 3) for k, v in solve_rates.items()}
     METRICS_FILE.write_text(json.dumps(derived, indent=2, default=str))
 
 

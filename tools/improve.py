@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
 
 from src.agent import MLXAgent
-from src.runtime.improve_runner import run_improvement_cycle
+from src.runtime.improve_runner import run_improvement_cycle, METRICS_FILE
 from src.runtime.self_improve_runtime import (
     apply_self_improve_runtime_environment,
     print_self_improve_runtime_banner,
@@ -63,9 +64,25 @@ def main() -> None:
                     failed_cycles += 1
                 total_completed = passed_cycles + failed_cycles
                 success_rate = passed_cycles / max(1, total_completed)
+
+                # Show live metrics from the feedback loops
+                metrics_str = ""
+                try:
+                    if METRICS_FILE.exists():
+                        m = json.loads(METRICS_FILE.read_text())
+                        ch_rate = m.get("challenge_solve_rate", 0)
+                        ch_total = m.get("challenges_attempted", 0)
+                        rates = m.get("solve_rates_by_difficulty", {})
+                        rates_str = " ".join(f"d{k}={float(v):.0%}" for k, v in sorted(rates.items()))
+                        metrics_str = f" | challenges: {ch_rate:.0%} of {ch_total}"
+                        if rates_str:
+                            metrics_str += f" [{rates_str}]"
+                except (json.JSONDecodeError, OSError):
+                    pass
+
                 print(
-                    f"\n📊 Session: {passed_cycles} passed, {failed_cycles} failed "
-                    f"({success_rate:.0%} on completed cycles); idle cycles not counted"
+                    f"\n📊 Session: {passed_cycles}/{total_completed} "
+                    f"({success_rate:.0%}){metrics_str}"
                 )
                 current_cycle += 1
                 sleep_s = float(os.environ.get("IMPROVE_LOOP_SLEEP_SEC", "3"))
