@@ -264,15 +264,11 @@ File: skills/{skill['file']}
 Description: {skill.get('description', '')}
 Specification: {skill.get('spec', '')}
 
-=== RULES (code MUST pass ALL or it gets deleted) ===
-1. MINIMUM 3 functions/methods (not counting __init__)
-2. MINIMUM 4 assert statements (real Python `assert`)
-3. No 'from src.' imports — standalone only
-4. Must print 'ALL TESTS PASSED' when run with python3
-5. Real logic in each method (not stubs/pass)
-6. Handle edge cases: empty inputs, None values
-7. If >100 lines: must include try/except error handling
-8. Include 'if __name__ == "__main__":' test block
+=== RULES (code gets deleted if ANY rule fails) ===
+1. At least 3 functions/methods with real logic (no pass/stubs)
+2. At least 4 `assert` statements in an `if __name__ == "__main__":` test block
+3. Print 'ALL TESTS PASSED' at the end if all tests pass
+4. No 'from src.' imports — use only stdlib + prereqs listed below
 
 === PREREQUISITE CODE (import with `from <module> import *`) ===
 {prereq_source}
