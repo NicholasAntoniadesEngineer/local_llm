@@ -174,16 +174,37 @@ def _get_solved_challenge_ids() -> set[str]:
     return solved
 
 
+def _get_attempt_counts() -> dict[str, int]:
+    """Count how many times each challenge has been attempted."""
+    if not CHALLENGE_RESULTS_FILE.exists():
+        return {}
+    counts: dict[str, int] = {}
+    try:
+        for line in CHALLENGE_RESULTS_FILE.read_text().strip().splitlines():
+            record = json.loads(line)
+            cid = record.get("challenge_id", "")
+            counts[cid] = counts.get(cid, 0) + 1
+    except (json.JSONDecodeError, OSError):
+        pass
+    return counts
+
+
 def _pick_next_challenge() -> Challenge | None:
-    """Pick the next unsolved challenge, prioritizing lower difficulty."""
+    """Pick the next challenge to attempt.
+
+    Priority: unsolved (easiest first), then least-attempted (for consistency).
+    """
+    if not CHALLENGES:
+        return None
     solved = _get_solved_challenge_ids()
     unsolved = [c for c in CHALLENGES if c.id not in solved]
-    if not unsolved:
-        # All solved — retry a random one to improve consistency
-        return random.choice(CHALLENGES) if CHALLENGES else None
-    # Sort by difficulty, pick easiest unsolved
-    unsolved.sort(key=lambda c: c.difficulty)
-    return unsolved[0]
+    if unsolved:
+        unsolved.sort(key=lambda c: c.difficulty)
+        return unsolved[0]
+
+    # All solved — pick least-attempted challenge for consistency practice
+    counts = _get_attempt_counts()
+    return min(CHALLENGES, key=lambda c: counts.get(c.id, 0))
 
 
 # ── Skill improvement path ───────────────────────────────────────────────

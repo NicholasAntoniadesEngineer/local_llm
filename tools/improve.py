@@ -31,7 +31,7 @@ def run_cycle(cycle_num: int, agent: MLXAgent | None = None) -> str:
     print(f"{scenario.action}: {scenario.skill_name}")
     print(f"TARGET: {scenario.target_path}")
     print(f"{'=' * 70}")
-    if cycle_result.outcome in ("accepted", "pre_validated"):
+    if cycle_result.outcome in ("accepted", "pre_validated", "challenge_solved"):
         print(f"✅ PASSED: {cycle_result.summary}")
         return "pass"
     print(f"❌ FAILED: {cycle_result.summary}")
