@@ -56,7 +56,7 @@ class MLXAgent:
         # Controller-path components (lazy — only created when run_loop is called)
         self.memory_manager = None
         self._idle_scheduler = None
-        self._episodic_buffer = None
+        self._episodic_buffer = EpisodicBuffer()  # Lightweight; needed by ContextBudgetGuard in __init__
         self.state_store = None
         self._status_writer = None
         self.tool_executor = None
@@ -351,7 +351,7 @@ class MLXAgent:
             return messages
 
         # 60-80%: collapse all but last 3 exchanges into summary
-        if fill_pct < 0.8:
+        if fill_pct < 0.8 and self._episodic_buffer:
             return self._episodic_buffer.compress_messages(messages)
 
         # 80%+: aggressive - keep only system + last 2 exchanges

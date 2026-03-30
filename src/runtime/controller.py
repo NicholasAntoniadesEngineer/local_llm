@@ -165,7 +165,7 @@ class AgentController:
         execution_result,
         verification: VerificationResult,
     ) -> tuple[str, str]:
-        if verification.should_stop or verification.accepted and verification.status == "accepted_completion":
+        if verification.should_stop or (verification.accepted and verification.status == "accepted_completion"):
             return TASK_PHASE_ACCEPT, "Verifier accepted completion."
         if tool_name in OBSERVATION_TOOLS - {"read_file"}:
             return TASK_PHASE_INSPECT, f"{tool_name} gathered external or workspace evidence."

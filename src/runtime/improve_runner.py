@@ -410,8 +410,10 @@ def run_challenge_cycle(
 
     outcome = "challenge_solved" if solved else "challenge_failed"
     summary = f"Challenge '{challenge.name}': {'SOLVED' if solved else 'FAILED'}"
-    if best_result and not solved:
+    if not solved and best_result:
         summary += f" — {best_result.error[:100]}"
+    elif not solved:
+        summary += " — no valid code generated in any attempt"
 
     _append_improve_journal({
         "cycle_num": cycle_num,
