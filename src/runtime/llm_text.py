@@ -32,3 +32,16 @@ def extract_python_code_block(text: str) -> str | None:
             return code
 
     return None
+
+
+def diagnose_extraction_failure(text: str) -> str:
+    """Explain why code extraction failed — for debugging, not recovery."""
+    if not text or not text.strip():
+        return "EMPTY_RESPONSE: Model returned empty/whitespace-only output"
+    if text.startswith("ERROR"):
+        return f"GENERATION_ERROR: {text[:200]}"
+    if "```" in text and "def " not in text and "class " not in text:
+        return f"FENCED_NON_PYTHON: Response has code fences but no def/class. First 200 chars: {text[:200]}"
+    if "def " in text or "class " in text:
+        return f"UNFENCED_CODE: Response contains Python but not in code fences. Model may need clearer instructions. First 200 chars: {text[:200]}"
+    return f"NO_PYTHON_DETECTED: Response doesn't look like Python at all. First 200 chars: {text[:200]}"

@@ -235,8 +235,15 @@ class MLXAgent:
                 max_tokens=max_new,
                 sampler=sampler,
             )
+            resp_len = len(response) if response else 0
+            print(f"  Generated {resp_len} chars")
+            if not response or not response.strip():
+                return "ERROR: Model returned empty response"
             return response
         except Exception as e:
+            import traceback
+            print(f"  ERROR: {e}")
+            traceback.print_exc()
             return f"ERROR: Generation failed: {e}"
 
     def _format_prompt(self, messages: list[dict], include_tools: bool = True) -> str:

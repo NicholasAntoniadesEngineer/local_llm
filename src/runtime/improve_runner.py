@@ -315,7 +315,7 @@ def run_direct_generation(
     max_attempts: int = 3,
 ) -> tuple[bool, str, int]:
     """Generate a skill module using direct single-shot LLM generation with retries."""
-    from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
+    from src.runtime.llm_text import extract_python_code_block, diagnose_extraction_failure, strip_thinking_tags
 
     temperatures = [0.0, 0.3, 0.6]
     failure_context = ""
@@ -331,12 +331,10 @@ def run_direct_generation(
 
         code = extract_python_code_block(response)
         if not code:
-            if "def " in response or "class " in response:
-                code = response
-            else:
-                failure_context = "Model did not output valid Python code. Output ONLY Python code."
-                print(f"    No code extracted from response")
-                continue
+            diagnosis = diagnose_extraction_failure(response)
+            failure_context = f"Code extraction failed: {diagnosis}"
+            print(f"    EXTRACTION FAILED: {diagnosis}")
+            continue
 
         scenario.target_path.parent.mkdir(parents=True, exist_ok=True)
         scenario.target_path.write_text(code)
@@ -363,7 +361,7 @@ def run_challenge_cycle(
     agent: "MLXAgent",
 ) -> ImprovementCycleResult:
     """Pick a coding challenge, solve it with the LLM, score the result."""
-    from src.runtime.llm_text import extract_python_code_block, strip_thinking_tags
+    from src.runtime.llm_text import extract_python_code_block, diagnose_extraction_failure, strip_thinking_tags
 
     challenge = _pick_next_challenge()
     if challenge is None:
@@ -392,11 +390,9 @@ def run_challenge_cycle(
 
         code = extract_python_code_block(response)
         if not code:
-            if "def " in response or "class " in response:
-                code = response
-            else:
-                print(f"    No code extracted")
-                continue
+            diagnosis = diagnose_extraction_failure(response)
+            print(f"    EXTRACTION FAILED: {diagnosis}")
+            continue
 
         result = run_challenge(challenge, code)
         _save_challenge_result(result)
