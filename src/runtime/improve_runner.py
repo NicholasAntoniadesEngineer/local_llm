@@ -256,8 +256,7 @@ def _build_direct_generation_prompt(
 Fix this specific issue. Do not repeat the same mistake.
 """
 
-    return f"""/nothink
-Write a complete, standalone Python module.
+    return f"""Write a complete, standalone Python module.
 {fail_block}
 === TASK ===
 Module: {skill['name']}

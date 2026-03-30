@@ -45,25 +45,23 @@ class MLXAgent:
         self.config_model_name = config_model_name
         self.config_model = CONFIG.models[config_model_name]
         self.goal = goal
-        self.memory_manager = MemoryManager(goal) if goal else None
-        self.logger = AgentLogger()
         self.skill_tree = SkillTree()
-        self._idle_scheduler = IdleScheduler()
-        self._episodic_buffer = EpisodicBuffer()
         self._skill_instances: dict[str, Any] = {}
+
+        # Lightweight init — heavy components loaded lazily for controller path
+        self.logger = AgentLogger()
         self._files_written = 0
         self._cache_factory = None
-        self.state_store = PersistentStateStore(self.logger.run_id, goal, self.logger.run_dir)
-        self._status_writer = PerfStatusWriter(
-            run_dir=self.logger.run_dir,
-            model_name=self.config_model.name,
-            context_window=self.config_model.context_window,
-            max_tokens=self.config_model.max_tokens,
-            model_size_gb=0.0,
-        )
-        self.tool_executor = ToolExecutor(CONFIG.output_dir, write_status=self._write_status)
-        self.verifier = RuntimeVerifier(self.skill_tree)
-        self.policy_engine = PolicyEngine(self._load_skill_module, goal)
+
+        # Controller-path components (lazy — only created when run_loop is called)
+        self.memory_manager = None
+        self._idle_scheduler = None
+        self._episodic_buffer = None
+        self.state_store = None
+        self._status_writer = None
+        self.tool_executor = None
+        self.verifier = None
+        self.policy_engine = None
 
         # Performance tracking
         self._perf: dict = {
@@ -264,7 +262,8 @@ class MLXAgent:
 
     def _write_status(self, status: str, generating: bool = False):
         """Write current status to perf.json so the monitor always has fresh data."""
-        self._status_writer.write_status(status=status, generating=generating, perf=self._perf)
+        if self._status_writer:
+            self._status_writer.write_status(status=status, generating=generating, perf=self._perf)
 
     def _pre_validate(self, path: str) -> str:
         """Quick AST validation during idle time. Returns 'OK' or 'WARN: ...'."""
@@ -391,9 +390,29 @@ class MLXAgent:
 
     # ── Main ReAct loop ───────────────────────────────────────────────────
 
+    def _ensure_controller_components(self, goal: str) -> None:
+        """Lazily initialize heavy controller components (only for run_loop path)."""
+        if self.state_store is not None:
+            return
+        self.memory_manager = MemoryManager(goal) if goal else None
+        self._idle_scheduler = IdleScheduler()
+        self._episodic_buffer = EpisodicBuffer()
+        self.state_store = PersistentStateStore(self.logger.run_id, goal, self.logger.run_dir)
+        self._status_writer = PerfStatusWriter(
+            run_dir=self.logger.run_dir,
+            model_name=self.config_model.name,
+            context_window=self.config_model.context_window,
+            max_tokens=self.config_model.max_tokens,
+            model_size_gb=getattr(self, '_model_size_gb', 8.0),
+        )
+        self.tool_executor = ToolExecutor(CONFIG.output_dir, write_status=self._write_status)
+        self.verifier = RuntimeVerifier(self.skill_tree)
+        self.policy_engine = PolicyEngine(self._load_skill_module, goal)
+
     def run_loop(self, goal: str) -> None:
         """Execute the verifier-driven runtime controller."""
         self.goal = goal
+        self._ensure_controller_components(goal)
         if not self.memory_manager:
             self.memory_manager = MemoryManager(goal)
 

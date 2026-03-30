@@ -256,8 +256,7 @@ print("PASS")
 def build_challenge_prompt(challenge: Challenge) -> str:
     """Build a prompt for the LLM to solve a coding challenge."""
     test_code = CHALLENGE_TESTS.get(challenge.id, "")
-    return f"""/nothink
-Solve this coding challenge. Output ONLY Python code, nothing else.
+    return f"""Solve this coding challenge. Output ONLY Python code, nothing else.
 
 CHALLENGE: {challenge.name}
 {challenge.description}
