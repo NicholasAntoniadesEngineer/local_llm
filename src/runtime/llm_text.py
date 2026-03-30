@@ -16,20 +16,33 @@ def strip_thinking_tags(text: str) -> str:
 
 
 def extract_python_code_block(text: str) -> str | None:
-    """Return the first fenced Python code block if present.
+    """Extract Python code from model output.
 
-    Tries ```python first, falls back to bare ``` if the content looks like Python.
+    Priority:
+    1. ```python ... ``` fenced block
+    2. ``` ... ``` bare fenced block (if content looks like Python)
+    3. Raw response if it starts with valid Python (import/def/class/from)
     """
+    if not text or not text.strip():
+        return None
+
+    # Priority 1: ```python fence
     match = PYTHON_CODE_FENCE_RE.search(text)
     if match:
         return match.group(1).strip()
 
-    # Fallback: bare code fence (```...```) — accept if it looks like Python
+    # Priority 2: bare ``` fence with Python content
     match = BARE_CODE_FENCE_RE.search(text)
     if match:
         code = match.group(1).strip()
         if "def " in code or "class " in code or "import " in code:
             return code
+
+    # Priority 3: raw unfenced Python — accept if first non-empty line is valid Python
+    stripped = text.strip()
+    first_line = stripped.split("\n")[0].strip()
+    if first_line.startswith(("import ", "from ", "def ", "class ", "#!", "# ")):
+        return stripped
 
     return None
 
