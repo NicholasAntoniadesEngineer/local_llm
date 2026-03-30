@@ -126,6 +126,7 @@ def _save_challenge_result(result: ChallengeResult) -> None:
         "score": result.score,
         "time_s": result.time_s,
         "error": result.error[:200] if result.error else "",
+        "code": result.code,
         "code_lines": len(result.code.splitlines()),
         "timestamp": datetime.now().isoformat(),
     })
