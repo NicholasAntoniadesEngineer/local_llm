@@ -172,7 +172,13 @@ class SkillTree:
                 self.graph.add_edge(r["prereq_id"], r["skill_id"])
 
     def _scan_completed(self):
-        """Detect passing skill files on disk with rigorous validation."""
+        """Detect passing skill files on disk and mark them completed.
+
+        Uses basic validation (syntax, size, tests) WITHOUT prereq import checks,
+        since established skills may be standalone implementations that don't
+        import their tree-defined prerequisites.
+        """
+        from src.runtime.verifier import validate_generated_module as _validate
         for nid in list(self.graph.nodes):
             n = self.graph.nodes[nid]
             if n.get("status") == "completed":
@@ -181,7 +187,8 @@ class SkillTree:
             if not fpath.exists() or fpath.stat().st_size < 200:
                 continue
             try:
-                accepted, summary = validate_generated_module(str(fpath), skill_tree=self)
+                # Validate WITHOUT skill_tree to skip prereq import checks
+                accepted, summary = _validate(str(fpath), skill_tree=None)
                 if accepted:
                     self.mark_completed(nid, summary or "auto-detected")
             except Exception:
