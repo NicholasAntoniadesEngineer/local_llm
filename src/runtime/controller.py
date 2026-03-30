@@ -423,6 +423,8 @@ class AgentController:
         )
 
         loop_detector = self.load_skill_instance("loop_detector", "LoopDetector")
+        confidence_scorer = self.load_skill_instance("confidence_scorer", "ConfidenceScorer")
+        result_evaluator = self.load_skill_instance("result_evaluator", "ResultEvaluator")
         active_skill = None
 
         sampler_stop = threading.Event()

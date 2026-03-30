@@ -208,6 +208,38 @@ class MLXAgent:
         mx.clear_cache()
         gc.collect()
 
+    def generate_simple(self, prompt: str, temperature: float = 0.0) -> str:
+        """Single-shot generation for direct skill building. No streaming, no controller.
+
+        Uses the already-loaded model/tokenizer. Creates a temporary sampler if
+        temperature differs from the default greedy sampler.
+        """
+        from mlx_lm import generate
+        from mlx_lm.sample_utils import make_sampler
+
+        sampler = make_sampler(temp=temperature) if temperature > 0 else self._sampler
+        messages = [{"role": "user", "content": prompt}]
+        formatted = self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        prompt_tokens = len(self.tokenizer.encode(formatted))
+        max_new = min(self.config_model.max_tokens, self.config_model.context_window - prompt_tokens - 256)
+        if max_new < 512:
+            return "ERROR: Prompt too large for generation"
+
+        print(f"  Generating ({prompt_tokens} prompt tokens, max {max_new} new, temp={temperature})...")
+        try:
+            response = generate(
+                self.model, self.tokenizer,
+                prompt=formatted,
+                max_tokens=max_new,
+                sampler=sampler,
+            )
+            return response
+        except Exception as e:
+            return f"ERROR: Generation failed: {e}"
+
     def _format_prompt(self, messages: list[dict], include_tools: bool = True) -> str:
         """Format messages using tokenizer's native chat template.
 

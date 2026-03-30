@@ -91,6 +91,10 @@ class SkillTree:
 
         # No external embedding model — use stdlib TF-IDF for zero GPU footprint
 
+        # Cooldown: track recently attempted skill IDs to prevent treadmill loops
+        self._recently_attempted: list[str] = []
+        self._cooldown_size = 3
+
         self._init_db()
         self._migrate_v3()
         if self._count() == 0:
@@ -388,6 +392,8 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
         for nid in self.graph.nodes:
             if self._status(nid) == "completed" or not self.is_unlocked(nid):
                 continue
+            if nid in self._recently_attempted:
+                continue
             data = self.graph.nodes[nid]
             n = data.get("pull_count", 0) + 1e-6
             r = self._field(nid, "current_impact") or data.get("impact", 5)
@@ -417,6 +423,14 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
         self.graph.nodes[sid]["pull_count"] = self.graph.nodes[sid].get("pull_count", 0) + 1
         self._save_node(sid)
 
+    def record_attempt(self, sid: str) -> None:
+        """Add skill to cooldown list to prevent re-selecting it immediately."""
+        if sid in self._recently_attempted:
+            self._recently_attempted.remove(sid)
+        self._recently_attempted.append(sid)
+        if len(self._recently_attempted) > self._cooldown_size:
+            self._recently_attempted.pop(0)
+
     def get_next_skill(self) -> Optional[dict]:
         """UCB1 bandit selection and record one pull (legacy combined API)."""
         best_node = self._select_best_unlocked_skill_id()
@@ -426,6 +440,19 @@ Write the UPGRADED version to {skill['file']}. Print 'ALL TESTS PASSED'. Say DON
 
     def is_unlocked(self, sid):
         return all(self._status(p) == "completed" for p in self.graph.predecessors(sid))
+
+    def read_prereq_full_source(self, skill) -> str:
+        """Read full source code of all prerequisite skill files for prompt inclusion."""
+        parts = []
+        for pid in self.graph.predecessors(skill["id"]):
+            fname = self._field(pid, "file")
+            f = SKILLS_DIR / fname
+            if not f.exists():
+                continue
+            source = f.read_text()
+            stem = Path(fname).stem
+            parts.append(f"# ── {stem}.py (prereq: import with `from {stem} import *`) ──\n{source}")
+        return "\n\n".join(parts) if parts else "(no prereqs)"
 
     def mark_completed(self, sid, output=""):
         with self._conn() as c:
