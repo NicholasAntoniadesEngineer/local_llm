@@ -69,6 +69,7 @@ class MLXAgent:
             "total_gen_time": 0.0,
             "step_times": [],
             "tool_success": {"total": 0, "success": 0},
+            "peak_tok_s": 0.0,
         }
         self._mlx_adapter = None
 
