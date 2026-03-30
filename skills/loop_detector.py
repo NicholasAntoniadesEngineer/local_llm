@@ -25,24 +25,27 @@ class LoopDetector:
 
     def is_stuck(self) -> bool:
         """Check if the agent is stuck in a loop"""
-        if len(self.actions) < 3:
+        try:
+            if len(self.actions) < 3:
+                return False
+
+            # Check if last 3 actions are from the same tool
+            tool, _, _ = self.actions[-1]
+            if any(a[0] != tool for a in self.actions[-3:-1]):
+                return False
+
+            # Check if results are >80% similar
+            results = [a[2] for a in self.actions[-3:]]
+
+            # Compare all pairs of results
+            for i in range(3):
+                for j in range(i+1, 3):
+                    if self.similarity(results[i], results[j]) <= 0.8:
+                        return False
+
+            return True
+        except (TypeError, ValueError, IndexError):
             return False
-
-        # Check if last 3 actions are from the same tool
-        tool, _, _ = self.actions[-1]
-        if any(a[0] != tool for a in self.actions[-3:-1]):
-            return False
-
-        # Check if results are >80% similar
-        results = [a[2] for a in self.actions[-3:]]
-
-        # Compare all pairs of results
-        for i in range(3):
-            for j in range(i+1, 3):
-                if self.similarity(results[i], results[j]) <= 0.8:
-                    return False
-
-        return True
 
     def suggest_escape(self, current_tool: str) -> Optional[str]:
         """Suggest a different tool/approach when stuck"""

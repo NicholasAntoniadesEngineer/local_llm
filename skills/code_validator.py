@@ -101,44 +101,39 @@ class CodeValidator:
         }
 
 if __name__ == "__main__":
-    # Test cases
-    test_code_valid = """
-def test_add():
-    assert 1 + 1 == 2"""
-    
-    test_code_syntax_error = """
-def test_add(
-    assert 1 + 1 == 2"""
-    
-    test_code_missing_import = """
-import non_existent_module
+    # Test 1: Valid code passes syntax check
+    valid_code = "def test_add():\n    assert 1 + 1 == 2\n"
+    ok, msg = CodeValidator.check_syntax(valid_code)
+    assert ok, f"Valid code should pass syntax check: {msg}"
 
-def test_add():
-    assert 1 + 1 == 2"""
-    
-    test_code_failing_test = """
-def test_add():
-    assert 1 + 1 == 3"""
-    
-    # Save test files
-    test_files = {
-        "valid.py": test_code_valid,
-        "syntax_error.py": test_code_syntax_error,
-        "missing_import.py": test_code_missing_import,
-        "failing_test.py": test_code_failing_test
-    }
-    
-    for filename, code in test_files.items():
-        with open(filename, 'w') as f:
-            f.write(code)
-        
-    # Run validation
-    for filename in test_files:
-        result = CodeValidator.validate_all(filename)
-        print(f"\nValidation for {filename}:")
-        print(f"Syntax OK: {result['syntax_ok']}")
-        print(f"Imports OK: {result['imports_ok']}")
-        print(f"Tests OK: {result['tests_ok']}")
-        print(f"Issues: {result['issues']}")
-        
-    print("\nALL TESTS PASSED")
+    # Test 2: Syntax error detected
+    bad_code = "def test_add(\n    assert 1 + 1 == 2"
+    ok2, msg2 = CodeValidator.check_syntax(bad_code)
+    assert not ok2, "Syntax error should be detected"
+
+    # Test 3: check_imports returns list
+    imports = CodeValidator.check_imports(valid_code)
+    assert isinstance(imports, list), "check_imports should return a list"
+
+    # Test 4: Empty code is valid syntax
+    ok3, _ = CodeValidator.check_syntax("")
+    assert ok3, "Empty code should be valid syntax"
+
+    # Test 5: validate_all returns expected keys
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(valid_code)
+        tmp_path = f.name
+    try:
+        result = CodeValidator.validate_all(tmp_path)
+        assert "syntax_ok" in result, "validate_all must return syntax_ok"
+        assert "imports_ok" in result, "validate_all must return imports_ok"
+        assert result["syntax_ok"] is True, "Valid code should have syntax_ok=True"
+    finally:
+        os.unlink(tmp_path)
+
+    # Test 6: Missing file returns error
+    result2 = CodeValidator.validate_all("/nonexistent/path.py")
+    assert result2["syntax_ok"] is False, "Missing file should fail"
+
+    print("ALL TESTS PASSED")

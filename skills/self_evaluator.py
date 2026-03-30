@@ -151,44 +151,45 @@ class SelfEvaluator:
             return False, f"Error running tests: {str(e)}"
 
 if __name__ == "__main__":
-    # Test cases
-    test_code_valid = """
-def test_add():
-    assert 1 + 1 == 2"""
-    
-    test_code_syntax_error = """
-def test_add(
-    assert 1 + 1 == 2"""
-    
-    test_code_missing_import = """
-import non_existent_module
+    import tempfile
 
-def test_add():
-    assert 1 + 1 == 2"""
-    
-    test_code_failing_test = """
-def test_add():
-    assert 1 + 1 == 3"""
-    
-    # Save test files
-    test_files = {
-        "valid.py": test_code_valid,
-        "syntax_error.py": test_code_syntax_error,
-        "missing_import.py": test_code_missing_import,
-        "failing_test.py": test_code_failing_test
-    }
-    
-    for filename, code in test_files.items():
-        with open(filename, 'w') as f:
-            f.write(code)
-    
-    # Run validation
-    for filename in test_files:
-        result = SelfEvaluator.evaluate_file(filename)
-        print(f"\nValidation for {filename}:")
-        print(f"Status: {result['status']}")
-        print(f"Message: {result['message']}")
-        print(f"Score: {result['score']}")
-        print(f"Recommendation: {result['recommendation']}")
-    
-    print("\nALL TESTS PASSED")
+    # Test 1: Valid code gets high score
+    valid_code = "def test_add():\n    assert 1 + 1 == 2\nprint('ALL TESTS PASSED')\n"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(valid_code)
+        valid_path = f.name
+    result = SelfEvaluator.evaluate_file(valid_path)
+    assert result["score"] > 0.0, f"Valid code should score > 0, got {result['score']}"
+    assert "status" in result, "Result must have status key"
+    os.unlink(valid_path)
+
+    # Test 2: Syntax error gets score 0
+    bad_code = "def test_add(\n    assert 1 + 1 == 2"
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(bad_code)
+        bad_path = f.name
+    result2 = SelfEvaluator.evaluate_file(bad_path)
+    assert result2["score"] == 0.0, f"Syntax error should score 0, got {result2['score']}"
+    assert result2["status"] == "error", "Syntax error should have error status"
+    os.unlink(bad_path)
+
+    # Test 3: Missing file returns error
+    result3 = SelfEvaluator.evaluate_file("/nonexistent/path.py")
+    assert result3["score"] == 0.0, "Missing file should score 0"
+    assert result3["status"] == "error", "Missing file should have error status"
+
+    # Test 4: _check_syntax works standalone
+    ok, msg = SelfEvaluator._check_syntax("x = 1")
+    assert ok, f"Valid syntax should pass: {msg}"
+    ok2, _ = SelfEvaluator._check_syntax("def (broken")
+    assert not ok2, "Broken syntax should fail"
+
+    # Test 5: _check_imports returns list
+    imports = SelfEvaluator._check_imports("import os\nx = 1")
+    assert isinstance(imports, list), "check_imports must return a list"
+
+    # Test 6: Result has recommendation
+    assert "recommendation" in result, "Result must have recommendation"
+    assert isinstance(result["recommendation"], str), "Recommendation must be string"
+
+    print("ALL TESTS PASSED")

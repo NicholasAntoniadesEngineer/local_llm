@@ -35,8 +35,17 @@ class ResultEvaluator:
         return score
 
     def _text_similarity(self, a: str, b: str) -> float:
-        # Use difflib to calculate text similarity
-        return difflib.SequenceMatcher(None, a, b).ratio()
+        """Calculate text similarity between two strings using difflib."""
+        if not isinstance(a, str) or not isinstance(b, str):
+            return 0.0
+        if not a and not b:
+            return 1.0
+        if not a or not b:
+            return 0.0
+        if a == b:
+            return 1.0
+        ratio = difflib.SequenceMatcher(None, a, b).ratio()
+        return max(0.0, min(1.0, ratio))
 
     def score_code_output(self, code: str, output: str, has_error: bool) -> float:
         if has_error:

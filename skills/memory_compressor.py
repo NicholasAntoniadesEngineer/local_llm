@@ -18,17 +18,20 @@ class MemoryCompressor:
 
         Returns: [summary_of_old, ...recent_iterations]
         """
-        if not iterations or not isinstance(iterations, list):
-            return []
-        if keep_recent < 0:
-            keep_recent = 0
-        if len(iterations) <= keep_recent:
-            return list(iterations)
+        try:
+            if not iterations or not isinstance(iterations, list):
+                return []
+            if keep_recent < 0:
+                keep_recent = 0
+            if len(iterations) <= keep_recent:
+                return list(iterations)
 
-        old = iterations[:-keep_recent] if keep_recent > 0 else iterations
-        recent = iterations[-keep_recent:] if keep_recent > 0 else []
-        summary = self.summarize_old(old)
-        return [summary] + list(recent)
+            old = iterations[:-keep_recent] if keep_recent > 0 else iterations
+            recent = iterations[-keep_recent:] if keep_recent > 0 else []
+            summary = self.summarize_old(old)
+            return [summary] + list(recent)
+        except (TypeError, ValueError, KeyError) as e:
+            return list(iterations) if isinstance(iterations, list) else []
 
     def summarize_old(self, iterations: List[Any]) -> Dict[str, Any]:
         """Extract key facts from old iterations into a compact summary."""

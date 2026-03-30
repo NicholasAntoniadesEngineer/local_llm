@@ -145,9 +145,6 @@ def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> Improv
         else:
             return None
 
-    # Record cooldown to prevent re-selecting same skill next cycle
-    skill_tree.record_attempt(selected_skill["id"])
-
     return ImprovementScenario(
         cycle_num=cycle_num,
         skill_id=selected_skill["id"],
@@ -226,7 +223,7 @@ Specification: {skill.get('spec', '')}
 
 {few_shot}
 
-Output ONLY the complete Python code for {skill['file']}. No explanation, no markdown fences."""
+Output ONLY the complete Python code for {skill['file']}. No explanation."""
 
 
 def run_direct_generation(
@@ -313,10 +310,10 @@ def run_improvement_cycle(
     if scenario.target_path.exists():
         shutil.copy2(scenario.target_path, backup_path)
 
-    # Skip pre-validation for skills on cooldown — force actual LLM generation
+    # Pre-validate: if the file already passes, skip LLM generation
     pre_ok = False
     pre_message = ""
-    if scenario.target_path.exists() and scenario.skill_id not in skill_tree._recently_attempted:
+    if scenario.target_path.exists():
         pre_ok, pre_message = validate_generated_module(str(scenario.target_path), skill_tree=skill_tree)
     if pre_ok:
         skill_tree.mark_completed(scenario.skill_id, pre_message)
@@ -340,6 +337,9 @@ def run_improvement_cycle(
         return result
 
     # ── Direct generation mode ──────────────────────────────────────────
+    # Record cooldown AFTER pre-validation to prevent treadmill on already-passing skills
+    skill_tree.record_attempt(scenario.skill_id)
+
     if agent is None:
         from src.agent import MLXAgent
         agent = MLXAgent(config_model_name=model_name, goal=scenario.goal_text)

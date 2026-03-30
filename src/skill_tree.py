@@ -290,11 +290,13 @@ class SkillTree:
         return sid
 
     def get_weakest_skill(self) -> Optional[dict]:
-        """Find the weakest completed skill that needs upgrading."""
+        """Find the weakest completed skill that needs upgrading (respects cooldown)."""
         weakest = None
         worst_score = float("inf")
         for nid in self.graph.nodes:
             if self._status(nid) != "completed":
+                continue
+            if nid in self._recently_attempted:
                 continue
             fpath = SKILLS_DIR / (self._field(nid, "file") or "")
             if not fpath.exists():

@@ -15,33 +15,35 @@ class Orchestrator:
 
     def plan_cycle(self, knowledge: float, capability: float, progress: float) -> dict:
         """Plan the next cycle based on current state"""
-        
-        # Validate inputs
-        if not (0.0 <= knowledge <= 1.0 and 0.0 <= capability <= 1.0 and 0.0 <= progress <= 1.0):
-            raise ValueError("All metrics must be between 0.0 and 1.0")
-        
-        # Determine next action
-        action = self.router.pick_tool(knowledge, capability, progress)
-        
-        # Format tool prompt
-        tool_prompt = self.router.format_tool_prompt(action, {
-            'query': 'Optimize AI agent system',
-            'path': 'agent_system.py',
-            'content': 'Optimized AI agent system code',
-            'code': 'print("Optimized AI agent system")',
-            'cmd': 'python3 agent_system.py'
-        })
-        
-        # Evaluate progress
-        evaluation = self.evaluate_progress(knowledge, capability, progress)
-        
-        return {
-            'action': action,
-            'tool_prompt': tool_prompt,
-            'phase': self.phase,
-            'progress': self.progress,
-            'evaluation': evaluation
-        }
+        try:
+            # Validate inputs
+            if not (0.0 <= knowledge <= 1.0 and 0.0 <= capability <= 1.0 and 0.0 <= progress <= 1.0):
+                raise ValueError("All metrics must be between 0.0 and 1.0")
+
+            # Determine next action
+            action = self.router.pick_tool(knowledge, capability, progress)
+
+            # Format tool prompt
+            tool_prompt = self.router.format_tool_prompt(action, {
+                'query': 'Optimize AI agent system',
+                'path': 'agent_system.py',
+                'content': 'Optimized AI agent system code',
+                'code': 'print("Optimized AI agent system")',
+                'cmd': 'python3 agent_system.py'
+            })
+
+            # Evaluate progress
+            evaluation = self.evaluate_progress(knowledge, capability, progress)
+
+            return {
+                'action': action,
+                'tool_prompt': tool_prompt,
+                'phase': self.phase,
+                'progress': self.progress,
+                'evaluation': evaluation
+            }
+        except (TypeError, ValueError) as e:
+            return {'action': None, 'error': str(e), 'phase': self.phase, 'progress': self.progress}
 
     def decide_next(self, knowledge: float, capability: float, progress: float) -> str:
         """Decide the next action to take"""

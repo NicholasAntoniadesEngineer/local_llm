@@ -108,27 +108,30 @@ class TaskPlanner:
         Returns:
             List of replanned tasks.
         """
-        if not isinstance(failed_task, dict) or not isinstance(error, str):
-            raise TypeError("Failed task must be a dict and error must be a string")
+        try:
+            if not isinstance(failed_task, dict) or not isinstance(error, str):
+                raise TypeError("Failed task must be a dict and error must be a string")
 
-        error_type = self.recovery.classify_error(error)
-        fix_suggestion = self.recovery.suggest_fix(error_type)
+            error_type = self.recovery.classify_error(error)
+            fix_suggestion = self.recovery.suggest_fix(error_type)
 
-        return [
-            {
-                'task': 'Replan',
-                'tool': 'web_search',
-                'priority': 1,
-                'depends_on': []
-            },
-            {
-                'task': 'Fix',
-                'tool': 'write_file',
-                'priority': 2,
-                'depends_on': ['Replan'],
-                'fix_suggestion': fix_suggestion
-            }
-        ]
+            return [
+                {
+                    'task': 'Replan',
+                    'tool': 'web_search',
+                    'priority': 1,
+                    'depends_on': []
+                },
+                {
+                    'task': 'Fix',
+                    'tool': 'write_file',
+                    'priority': 2,
+                    'depends_on': ['Replan'],
+                    'fix_suggestion': fix_suggestion
+                }
+            ]
+        except (TypeError, ValueError, AttributeError) as e:
+            return [{'task': 'Retry', 'tool': 'web_search', 'priority': 1, 'depends_on': [], 'error': str(e)}]
 
 
 if __name__ == "__main__":
