@@ -8,7 +8,6 @@ Falls back to skill building/upgrading when no challenges remain.
 from __future__ import annotations
 
 import json
-import random
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -20,10 +19,9 @@ from src.challenges import (
     Challenge,
     ChallengeResult,
     build_challenge_prompt,
-    get_challenges_by_difficulty,
     run_challenge,
 )
-from src.paths import IMPROVE_SESSION_FILE, RUNS_DIR, SKILLS_DIR
+from src.paths import IMPROVE_SESSION_FILE, RUNS_DIR, SKILLS_DIR, ROOT
 from src.runtime.verifier import validate_generated_module
 from src.skill_tree import SkillTree
 
@@ -31,11 +29,23 @@ if TYPE_CHECKING:
     from src.agent import MLXAgent
 
 
-# ── Paths for feedback loop ──────────────────────────────────────────────
+# ── Paths for feedback loop (all absolute via src.paths) ─────────────────
 
 SUCCESSFUL_GENERATIONS_FILE = RUNS_DIR / "successful_generations.jsonl"
 METRICS_FILE = RUNS_DIR / "metrics.json"
 CHALLENGE_RESULTS_FILE = RUNS_DIR / "challenge_results.jsonl"
+
+# Cap JSONL files to prevent unbounded growth
+_MAX_JSONL_LINES = 2000
+
+
+def _ensure_dirs() -> None:
+    """Create required directories upfront. Called once at module load."""
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_dirs()
 
 
 @dataclass
@@ -61,10 +71,7 @@ class ImprovementCycleResult:
 
 
 def _append_improve_journal(record: dict[str, Any]) -> None:
-    IMPROVE_SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {**record, "timestamp": datetime.now().isoformat()}
-    with IMPROVE_SESSION_FILE.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, default=str) + "\n")
+    _append_jsonl(IMPROVE_SESSION_FILE, {**record, "timestamp": datetime.now().isoformat()})
 
 
 def _load_metrics() -> dict[str, Any]:
@@ -102,22 +109,18 @@ def _save_metrics(metrics: dict[str, Any]) -> None:
 
 def _save_successful_generation(skill_id: str, prompt: str, code: str) -> None:
     """Save a successful (prompt, code) pair for future few-shot use."""
-    SUCCESSFUL_GENERATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    record = {
+    _append_jsonl(SUCCESSFUL_GENERATIONS_FILE, {
         "skill_id": skill_id,
         "prompt_preview": prompt[:500],
         "code": code,
         "timestamp": datetime.now().isoformat(),
         "lines": len(code.splitlines()),
-    }
-    with SUCCESSFUL_GENERATIONS_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+    })
 
 
 def _save_challenge_result(result: ChallengeResult) -> None:
     """Save a challenge result for tracking progress over time."""
-    CHALLENGE_RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    record = {
+    _append_jsonl(CHALLENGE_RESULTS_FILE, {
         "challenge_id": result.challenge_id,
         "solved": result.solved,
         "score": result.score,
@@ -125,9 +128,7 @@ def _save_challenge_result(result: ChallengeResult) -> None:
         "error": result.error[:200] if result.error else "",
         "code_lines": len(result.code.splitlines()),
         "timestamp": datetime.now().isoformat(),
-    }
-    with CHALLENGE_RESULTS_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+    })
 
 
 def _load_few_shot_example() -> str:
@@ -159,33 +160,54 @@ def _builtin_few_shot_example() -> str:
     return ""
 
 
+def _read_jsonl(path: Path) -> list[dict]:
+    """Read a JSONL file, skipping corrupted lines instead of aborting."""
+    if not path.exists():
+        return []
+    records = []
+    try:
+        for line in path.read_text().strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue  # Skip corrupted line, don't abort entire file
+    except OSError:
+        pass
+    return records
+
+
+def _append_jsonl(path: Path, record: dict) -> None:
+    """Append a record to a JSONL file, capping at _MAX_JSONL_LINES."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+    # Cap file size: keep only the last _MAX_JSONL_LINES
+    try:
+        lines = path.read_text().strip().splitlines()
+        if len(lines) > _MAX_JSONL_LINES:
+            path.write_text("\n".join(lines[-_MAX_JSONL_LINES:]) + "\n")
+    except OSError:
+        pass
+
+
 def _get_solved_challenge_ids() -> set[str]:
     """Get IDs of challenges that have been solved at least once."""
-    if not CHALLENGE_RESULTS_FILE.exists():
-        return set()
     solved = set()
-    try:
-        for line in CHALLENGE_RESULTS_FILE.read_text().strip().splitlines():
-            record = json.loads(line)
-            if record.get("solved"):
-                solved.add(record["challenge_id"])
-    except (json.JSONDecodeError, OSError):
-        pass
+    for record in _read_jsonl(CHALLENGE_RESULTS_FILE):
+        if record.get("solved"):
+            solved.add(record.get("challenge_id", ""))
     return solved
 
 
 def _get_attempt_counts() -> dict[str, int]:
     """Count how many times each challenge has been attempted."""
-    if not CHALLENGE_RESULTS_FILE.exists():
-        return {}
     counts: dict[str, int] = {}
-    try:
-        for line in CHALLENGE_RESULTS_FILE.read_text().strip().splitlines():
-            record = json.loads(line)
-            cid = record.get("challenge_id", "")
-            counts[cid] = counts.get(cid, 0) + 1
-    except (json.JSONDecodeError, OSError):
-        pass
+    for record in _read_jsonl(CHALLENGE_RESULTS_FILE):
+        cid = record.get("challenge_id", "")
+        counts[cid] = counts.get(cid, 0) + 1
     return counts
 
 
@@ -225,7 +247,7 @@ def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> Improv
             skill_name=selected_skill["name"],
             action=action_name,
             goal_text=goal_text,
-            target_path=Path("skills") / selected_skill["file"],
+            target_path=SKILLS_DIR / selected_skill["file"],
         )
 
     # No new skills to build — try upgrading weakest
@@ -240,7 +262,7 @@ def select_improvement_scenario(cycle_num: int, skill_tree: SkillTree) -> Improv
             skill_name=selected_skill["name"],
             action=action_name,
             goal_text=goal_text,
-            target_path=Path("skills") / selected_skill["file"],
+            target_path=SKILLS_DIR / selected_skill["file"],
         )
 
     return None
@@ -422,7 +444,7 @@ def run_challenge_cycle(
         skill_name=challenge.name,
         action="CHALLENGE",
         goal_text=challenge.description,
-        target_path=Path("run_output_data") / f"challenge_{challenge.id}.py",
+        target_path=RUNS_DIR / f"challenge_{challenge.id}.py",
     )
 
     outcome = "challenge_solved" if solved else "challenge_failed"
@@ -473,7 +495,7 @@ def run_improvement_cycle(
             skill_name=new_skill["name"],
             action="BUILDING",
             goal_text=skill_tree.build_goal_for_skill(new_skill),
-            target_path=Path("skills") / new_skill["file"],
+            target_path=SKILLS_DIR / new_skill["file"],
         )
         skill_tree.record_pull(new_skill["id"])
 
