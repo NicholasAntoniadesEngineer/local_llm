@@ -266,8 +266,9 @@ Your code will be tested with this test code appended to it:
 {test_code}
 ```
 
-Write ONLY the function/class definition(s) needed. No imports unless necessary.
-No if __name__ block. No explanation. Just the code."""
+Write ONLY the Python code needed (imports, function/class definitions).
+Include any imports your code needs (like `import time`, `from collections import ...`).
+No if __name__ block. No explanation. No markdown. Just valid Python code."""
 
 
 def run_challenge(challenge: Challenge, code: str) -> ChallengeResult:

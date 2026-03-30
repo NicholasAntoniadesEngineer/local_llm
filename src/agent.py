@@ -217,7 +217,10 @@ class MLXAgent:
         from mlx_lm.sample_utils import make_sampler
 
         sampler = make_sampler(temp=temperature) if temperature > 0 else self._sampler
-        messages = [{"role": "user", "content": prompt}]
+        messages = [
+            {"role": "system", "content": "You are a Python code generator. Output ONLY valid Python code. No explanations, no markdown fences, no commentary."},
+            {"role": "user", "content": prompt},
+        ]
         formatted = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
