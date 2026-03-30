@@ -48,7 +48,7 @@ def main() -> None:
     print_self_improve_runtime_banner()
 
     model_name = os.environ.get("AGENT_MODEL", "fast")
-    persistent_agent = MLXAgent(config_model_name=model_name, goal="init") if args.loop else None
+    persistent_agent = MLXAgent(config_model_name=model_name, goal="self-improve") if args.loop else None
     passed_cycles = 0
     failed_cycles = 0
 

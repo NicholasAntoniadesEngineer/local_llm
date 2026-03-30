@@ -21,7 +21,7 @@ from src.challenges import (
     build_challenge_prompt,
     run_challenge,
 )
-from src.paths import IMPROVE_SESSION_FILE, RUNS_DIR, SKILLS_DIR, ROOT
+from src.paths import IMPROVE_SESSION_FILE, RUNS_DIR, SKILLS_DIR
 from src.runtime.verifier import validate_generated_module
 from src.skill_tree import SkillTree
 
